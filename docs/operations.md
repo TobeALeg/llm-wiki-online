@@ -17,7 +17,7 @@ GitHub issue 或提交记录。
    `https://lw.app.mentti.work/auth/callback` 和成员 Webhook 地址。
 2. 配置 `lw.app.mentti.work` DNS，再分别验证服务器 80/443、TLS 证书和 Nginx
    `/mcp` 反向代理。Menti 登记、DNS、TLS 和代理不是同一个验收项。
-3. 在服务器部署 Nginx 配置和 Compose 服务，执行 `docker compose up -d --build`。
+3. 在服务器部署 Nginx 配置和 Compose 服务，执行 `docker compose up -d --build --wait`，再确认 `/healthz` 返回 `status=ok`。
 4. 检查 `/healthz`、登录回调、`/api/mcp-token` 和远程 `/mcp` 的真实调用。
 
 Compose 将 web 和 mcp 仅绑定到宿主机回环地址 8000/4310，宿主机 Nginx 使用这两个

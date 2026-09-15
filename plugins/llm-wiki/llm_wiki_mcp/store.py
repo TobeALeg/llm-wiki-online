@@ -26,6 +26,10 @@ class IdempotencyError(StoreError):
     pass
 
 
+class PageNotFoundError(StoreError):
+    pass
+
+
 def _now_iso() -> str:
     from datetime import datetime, timezone
 
@@ -330,26 +334,35 @@ class SharedWikiStore:
             return result
 
     def page_versions(self, slug: str) -> dict[str, Any]:
-        self.get_page(slug)
+        if not isinstance(slug, str) or not __import__("re").fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug):
+            raise StoreError("Invalid page slug.")
         with self._db() as db:
-            current = db.execute("SELECT version FROM wiki_pages WHERE slug = ?", (slug,)).fetchone()
-            current_version = int(current["version"]) if current else None
-            rows = db.execute(
-                """
-                SELECT v.id, v.version, v.slug, v.title, v.type, v.status, v.tags_json,
-                       v.summary, v.source_ids_json, v.actor_subject, v.action,
-                       v.created_at, v.previous_version, a.summary AS audit_summary,
-                       a.before_version, a.after_version
-                FROM wiki_versions AS v
-                LEFT JOIN wiki_audits AS a ON a.version = v.version AND a.action = v.action
-                WHERE v.slug = ? ORDER BY v.version DESC, v.id DESC
-                """,
-                (slug,),
-            ).fetchall()
+            db.execute("BEGIN")
+            try:
+                current = db.execute("SELECT version FROM wiki_pages WHERE slug = ?", (slug,)).fetchone()
+                if not current:
+                    raise PageNotFoundError("Wiki page does not exist.")
+                current_version = int(current["version"])
+                rows = db.execute(
+                    """
+                    SELECT v.id, v.version, v.slug, v.title, v.type, v.status, v.tags_json,
+                           v.summary, v.body, v.source_ids_json, v.actor_subject, v.action,
+                           v.created_at, v.previous_version, a.summary AS audit_summary,
+                           a.before_version, a.after_version
+                    FROM wiki_versions AS v
+                    LEFT JOIN wiki_audits AS a ON a.version = v.version AND a.action = v.action
+                    WHERE v.slug = ? ORDER BY v.version DESC, v.id DESC
+                    """,
+                    (slug,),
+                ).fetchall()
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
         return {
             "slug": slug,
             "versions": [{
-                "id": row["id"], "version": row["version"], "title": row["title"], "type": row["type"], "status": row["status"] if row["version"] == current_version else ("superseded" if row["status"] == "current" else row["status"]), "tags": json.loads(row["tags_json"]), "summary": row["summary"], "audit_summary": row["audit_summary"] or "", "sources": json.loads(row["source_ids_json"]), "actor_subject": row["actor_subject"], "action": row["action"], "created_at": row["created_at"], "previous_version": row["previous_version"], "before_version": row["before_version"], "after_version": row["after_version"],
+                "id": row["id"], "version": row["version"], "title": row["title"], "type": row["type"], "status": row["status"] if row["version"] == current_version else ("superseded" if row["status"] == "current" else row["status"]), "tags": json.loads(row["tags_json"]), "summary": row["summary"], "body": row["body"], "audit_summary": row["audit_summary"] or "", "sources": json.loads(row["source_ids_json"]), "actor_subject": row["actor_subject"], "action": row["action"], "created_at": row["created_at"], "previous_version": row["previous_version"], "before_version": row["before_version"], "after_version": row["after_version"],
             } for row in rows],
         }
 

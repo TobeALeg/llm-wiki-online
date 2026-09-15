@@ -131,6 +131,7 @@ class SharedServiceTests(unittest.TestCase):
         self.assertEqual(history_entry["before_version"], 2)
         self.assertEqual(history_entry["after_version"], 3)
         self.assertIn("Restored page", history_entry["audit_summary"])
+        self.assertEqual(history_entry["body"], "First body")
 
 
 if __name__ == "__main__":

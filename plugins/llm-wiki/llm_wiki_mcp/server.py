@@ -50,6 +50,7 @@ def create_company_mcp() -> FastMCP:
         submit_update=shared.submit,
         restore_page=shared.restore,
         organize_local=local.organize_local,
+        revoke_token=auth.revoke_mcp_token,
     )
 
 READ_ONLY = ToolAnnotations(

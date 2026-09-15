@@ -74,6 +74,26 @@ class WikiCoreTests(unittest.TestCase):
                 "purpose",
             )
 
+    def test_update_source_ids_only_include_sources_cited_by_returned_pages(self):
+        def model(payload, purpose, pages):
+            return {"pages": [{
+                "slug": "new",
+                "title": "New",
+                "type": "guide",
+                "status": "current",
+                "tags": [],
+                "summary": "New",
+                "body": "New",
+                "sources": ["conversation:new"],
+            }]}
+
+        result = WikiCore(model).organize(
+            [{"source_id": "conversation:new", "content": "new"}],
+            [{"slug": "old", "body": "old", "sources": ["conversation:old"]}],
+            "Capture",
+        )
+        self.assertEqual(result["source_ids"], ["conversation:new"])
+
 
 if __name__ == "__main__":
     unittest.main()

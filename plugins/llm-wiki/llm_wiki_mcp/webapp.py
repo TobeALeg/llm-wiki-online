@@ -16,7 +16,7 @@ from .auth import AuthError, AuthService
 from .model import ModelError
 from .remote_service import RemoteWikiService
 from .shared_service import SharedWikiService
-from .store import ConflictError, StoreError
+from .store import ConflictError, PageNotFoundError, StoreError
 
 
 class NotFoundError(RuntimeError):
@@ -201,9 +201,10 @@ class WikiWebApp:
             return self.response(200, result)
         match = re.fullmatch(r"/api/wiki/pages/([a-z0-9]+(?:-[a-z0-9]+)*)/versions", route)
         if match:
-            if self.shared.page(member["subject"], match.group(1))["page"] is None:
-                raise NotFoundError("Wiki page does not exist.")
-            return self.response(200, self.shared.versions(member["subject"], match.group(1)))
+            try:
+                return self.response(200, self.shared.versions(member["subject"], match.group(1)))
+            except PageNotFoundError as exc:
+                raise NotFoundError(str(exc)) from exc
         if route == "/api/me":
             return self.response(200, {"member": member})
         raise NotFoundError("Route does not exist.")

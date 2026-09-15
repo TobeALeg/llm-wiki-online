@@ -41,6 +41,13 @@ def context_subject() -> str:
     return access.client_id
 
 
+def context_token() -> str:
+    access = get_access_token()
+    if access is None or not access.token:
+        raise PermissionError("Authentication required.")
+    return access.token
+
+
 def create_remote_mcp(
     auth: AuthService,
     read_status: Callable[[str], dict[str, Any]],
@@ -52,6 +59,7 @@ def create_remote_mcp(
     submit_update: Callable[..., dict[str, Any]] | None = None,
     restore_page: Callable[..., dict[str, Any]] | None = None,
     organize_local: Callable[..., dict[str, Any]] | None = None,
+    revoke_token: Callable[[str], None] | None = None,
 ) -> FastMCP:
     """Create the protected `/mcp` server and register its first read seam."""
 
@@ -135,5 +143,15 @@ def create_remote_mcp(
         def local_wiki_organize(materials: list[dict[str, Any]], existing_pages: list[dict[str, Any]], purpose: str, ctx: Context = None) -> dict[str, Any]:
             context_subject()
             return organize_local(materials, existing_pages, purpose)
+
+    if revoke_token:
+        @server.tool(
+            name="company_wiki_revoke_credential",
+            title="Revoke current Wiki credential",
+            description="Immediately revoke the bearer credential used for this call.",
+        )
+        def company_wiki_revoke_credential(ctx: Context = None) -> dict[str, Any]:
+            revoke_token(context_token())
+            return {"status": "revoked"}
 
     return server

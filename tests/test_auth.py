@@ -81,6 +81,11 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(self.store.reconcile([]), 1)
         self.assertFalse(self.store.member("menti-5")["enabled"])
 
+    def test_reconciliation_validates_the_whole_directory_before_writing(self):
+        with self.assertRaises(AuthError):
+            self.store.reconcile([{"subject": "menti-6", "enabled": True}, {"subject": ""}])
+        self.assertIsNone(self.store.member("menti-6"))
+
 
 if __name__ == "__main__":
     unittest.main()

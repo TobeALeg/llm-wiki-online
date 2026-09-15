@@ -190,7 +190,7 @@ class WikiCore:
             "schema_version": CORE_SCHEMA_VERSION,
             "pages": pages,
             "note": _clean_string(result.get("note", "Wiki update prepared."), "note", max_chars=2_000),
-            "source_ids": sorted(allowed_sources),
+            "source_ids": sorted({source for page in pages for source in page["sources"]}),
         }
         provider = result.get("_provider")
         if isinstance(provider, dict):

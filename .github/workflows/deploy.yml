@@ -17,9 +17,29 @@ jobs:
       - run: python -m pip install -e ./plugins/llm-wiki
       - run: python -m unittest discover -s tests -v
 
-  deploy:
+  deploy_config:
     needs: verify
-    if: ${{ secrets.LW_DEPLOY_HOST != '' && secrets.LW_DEPLOY_SSH_KEY != '' && secrets.LW_DEPLOY_KNOWN_HOSTS != '' }}
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        env:
+          DEPLOY_HOST: ${{ secrets.LW_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.LW_DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.LW_DEPLOY_PATH }}
+          DEPLOY_KEY: ${{ secrets.LW_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.LW_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$DEPLOY_KEY" ] && [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    needs: [verify, deploy_config]
+    if: ${{ needs.deploy_config.outputs.ready == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,10 +51,10 @@ jobs:
           DEPLOY_KEY: ${{ secrets.LW_DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.LW_DEPLOY_KNOWN_HOSTS }}
         run: |
-          install -m 600 /dev/null deploy-key
-          printf '%s\n' "$DEPLOY_KEY" > deploy-key
-          install -m 600 /dev/null known_hosts
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > known_hosts
-          tar --exclude=.git --exclude=.env.production -czf llm-wiki.tar.gz .
-          scp -i deploy-key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=yes llm-wiki.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/llm-wiki.tar.gz"
-          ssh -i deploy-key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH' && tar -xzf /tmp/llm-wiki.tar.gz -C '$DEPLOY_PATH' && cd '$DEPLOY_PATH' && docker compose -f docker-compose.production.yml up -d --build"
+          install -m 600 /dev/null "$RUNNER_TEMP/deploy-key"
+          printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/deploy-key"
+          install -m 600 /dev/null "$RUNNER_TEMP/known_hosts"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/known_hosts"
+          tar --exclude=.git --exclude=.env.production -czf "$RUNNER_TEMP/llm-wiki.tar.gz" .
+          scp -i "$RUNNER_TEMP/deploy-key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" -o StrictHostKeyChecking=yes "$RUNNER_TEMP/llm-wiki.tar.gz" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/llm-wiki.tar.gz"
+          ssh -i "$RUNNER_TEMP/deploy-key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH' && tar -xzf /tmp/llm-wiki.tar.gz -C '$DEPLOY_PATH' && cd '$DEPLOY_PATH' && docker compose -f docker-compose.production.yml up -d --build --wait && docker compose -f docker-compose.production.yml exec -T web python -c \"import json,urllib.request; result=json.load(urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)); raise SystemExit(0 if result.get('status') == 'ok' else 1)\""

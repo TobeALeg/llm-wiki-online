@@ -261,25 +261,48 @@ class AuthStore:
 
     def reconcile(self, identities: Iterable[dict[str, Any]]) -> int:
         identities = list(identities)
-        changed = 0
+        normalized = []
         seen_subjects = set()
         for identity in identities:
+            if not isinstance(identity, dict):
+                raise AuthError("Each reconciled member must be an object.")
             subject = _required_text(identity.get("subject", identity.get("sub")), "subject")
+            if subject in seen_subjects:
+                raise AuthError(f"Member directory contains duplicate subject {subject}.")
             seen_subjects.add(subject)
-            current = self.member(subject)
-            enabled = bool(identity.get("enabled", identity.get("active", True)))
-            if not current or current["enabled"] != enabled or current["email"] != str(identity.get("email", "") or "") or current["name"] != str(identity.get("name", "") or ""):
-                self.upsert_member(identity, sequence=(current or {}).get("sequence", 0) + 1)
-                changed += 1
+            normalized.append({
+                "subject": subject,
+                "email": str(identity.get("email", "") or "").strip()[:320],
+                "name": str(identity.get("name", "") or "").strip()[:240],
+                "enabled": bool(identity.get("enabled", identity.get("active", True))),
+            })
+        changed = 0
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
+            current_rows = {row["subject"]: row for row in db.execute("SELECT * FROM members")}
+            now = _now()
+            for identity in normalized:
+                current = current_rows.get(identity["subject"])
+                if current and bool(current["enabled"]) == identity["enabled"] and current["email"] == identity["email"] and current["name"] == identity["name"]:
+                    continue
+                sequence = int(current["sequence"]) + 1 if current else 0
+                db.execute(
+                    """
+                    INSERT INTO members(subject, email, name, enabled, sequence, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(subject) DO UPDATE SET email=excluded.email, name=excluded.name,
+                        enabled=excluded.enabled, sequence=excluded.sequence, updated_at=excluded.updated_at
+                    """,
+                    (identity["subject"], identity["email"], identity["name"], int(identity["enabled"]), sequence, now),
+                )
+                changed += 1
             rows = db.execute("SELECT subject, sequence FROM members WHERE enabled = 1").fetchall()
             for row in rows:
                 if row["subject"] in seen_subjects:
                     continue
                 db.execute(
                     "UPDATE members SET enabled = 0, sequence = ?, updated_at = ? WHERE subject = ?",
-                    (int(row["sequence"]) + 1, _now(), row["subject"]),
+                    (int(row["sequence"]) + 1, now, row["subject"]),
                 )
                 changed += 1
             db.commit()
