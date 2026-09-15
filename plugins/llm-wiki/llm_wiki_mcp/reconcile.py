@@ -30,7 +30,11 @@ class MemberReconciler:
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval_seconds):
-            self.reconcile_once()
+            try:
+                self.reconcile_once()
+            except Exception:
+                # A transient directory outage must not kill future reconciliation.
+                continue
 
     def stop(self) -> None:
         self._stop.set()

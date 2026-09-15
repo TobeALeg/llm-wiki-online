@@ -48,6 +48,11 @@ class AuthTests(unittest.TestCase):
         self.assertIsNotNone(self.store.member("menti-2"))
         self.assertFalse(self.store.member("menti-2")["enabled"])
 
+        self.store.register_authorization_code("disabled-refresh")
+        with self.assertRaisesRegex(AuthError, "disabled"):
+            AuthService(self.store, FakeProvider({"subject": "menti-2", "name": "Still disabled"})).login_with_code("disabled-refresh")
+        self.assertFalse(self.store.member("menti-2")["enabled"])
+
     def test_mcp_token_is_bound_to_subject_and_revocable(self):
         self.store.register_authorization_code("valid")
         service = AuthService(self.store, FakeProvider({"subject": "menti-3", "name": "Member"}))
@@ -70,6 +75,11 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(self.store.apply_event("evt-0", {"subject": "menti-4", "enabled": True}, 1), "stale")
         self.assertEqual(self.store.apply_event("evt-1", {"subject": "menti-4", "enabled": True}, 3), "duplicate")
         self.assertFalse(self.store.member("menti-4")["enabled"])
+
+    def test_reconciliation_disables_members_missing_from_authoritative_directory(self):
+        self.store.upsert_member({"subject": "menti-5", "name": "Gone", "enabled": True})
+        self.assertEqual(self.store.reconcile([]), 1)
+        self.assertFalse(self.store.member("menti-5")["enabled"])
 
 
 if __name__ == "__main__":

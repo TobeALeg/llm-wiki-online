@@ -49,8 +49,10 @@ Menti identity → AuthService → MCP/browser request
               page + source + version + audit + idempotency record
 ```
 
-Both MCP and browser reads query the same committed snapshot version. Clients
-can submit content and source identifiers, but never a server filesystem path.
+Both MCP and browser reads query the same committed snapshot version. Only the
+authenticated MCP write tools commit company content; the browser API is
+read-only. Clients can submit content and source identifiers, but never a
+server filesystem path.
 
 ## status flow
 

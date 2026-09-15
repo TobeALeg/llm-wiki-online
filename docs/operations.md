@@ -20,6 +20,11 @@ GitHub issue 或提交记录。
 3. 在服务器部署 Nginx 配置和 Compose 服务，执行 `docker compose up -d --build`。
 4. 检查 `/healthz`、登录回调、`/api/mcp-token` 和远程 `/mcp` 的真实调用。
 
+Compose 将 web 和 mcp 仅绑定到宿主机回环地址 8000/4310，宿主机 Nginx 使用这两个
+地址转发；它们不会直接暴露到公网。若使用 GitHub Actions 部署，还需配置
+`LW_DEPLOY_HOST`、`LW_DEPLOY_USER`、`LW_DEPLOY_PATH`、`LW_DEPLOY_SSH_KEY` 和
+由可信运维来源提供的完整 `LW_DEPLOY_KNOWN_HOSTS` SSH 主机指纹。
+
 ## 备份和恢复
 
 使用 operator CLI 对 SQLite 做在线一致性备份：

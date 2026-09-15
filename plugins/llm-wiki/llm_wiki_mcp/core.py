@@ -11,6 +11,8 @@ CORE_SCHEMA_VERSION = 1
 MAX_MATERIAL_CHARS = 180_000
 MAX_OUTPUT_CHARS = 240_000
 MAX_PAGE_BODY_CHARS = 100_000
+MAX_EXISTING_PAGES = 500
+MAX_EXISTING_CHARS = 240_000
 ALLOWED_TYPES = {
     "concept",
     "decision",
@@ -84,7 +86,9 @@ def normalize_existing_pages(pages: Iterable[Any]) -> list[dict[str, Any]]:
     if isinstance(pages, (str, bytes)) or not isinstance(pages, Iterable):
         raise CoreError("existing_pages must be a list.")
     result = []
-    for page in pages:
+    for index, page in enumerate(pages):
+        if index >= MAX_EXISTING_PAGES:
+            raise CoreError(f"existing_pages exceeds the {MAX_EXISTING_PAGES} page limit.")
         if not isinstance(page, dict):
             raise CoreError("Each existing page must be an object.")
         slug = _clean_string(page.get("slug"), "page slug", max_chars=80)
@@ -101,6 +105,8 @@ def normalize_existing_pages(pages: Iterable[Any]) -> list[dict[str, Any]]:
             "content": content,
             "sources": sorted({_source_id(source) for source in sources}),
         })
+    if sum(len(page["content"]) for page in result) > MAX_EXISTING_CHARS:
+        raise CoreError(f"existing_pages exceed the {MAX_EXISTING_CHARS} character limit.")
     return result
 
 

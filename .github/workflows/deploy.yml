@@ -19,7 +19,7 @@ jobs:
 
   deploy:
     needs: verify
-    if: ${{ secrets.LW_DEPLOY_HOST != '' && secrets.LW_DEPLOY_SSH_KEY != '' }}
+    if: ${{ secrets.LW_DEPLOY_HOST != '' && secrets.LW_DEPLOY_SSH_KEY != '' && secrets.LW_DEPLOY_KNOWN_HOSTS != '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,9 +29,12 @@ jobs:
           DEPLOY_USER: ${{ secrets.LW_DEPLOY_USER }}
           DEPLOY_PATH: ${{ secrets.LW_DEPLOY_PATH }}
           DEPLOY_KEY: ${{ secrets.LW_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.LW_DEPLOY_KNOWN_HOSTS }}
         run: |
           install -m 600 /dev/null deploy-key
           printf '%s\n' "$DEPLOY_KEY" > deploy-key
+          install -m 600 /dev/null known_hosts
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > known_hosts
           tar --exclude=.git --exclude=.env.production -czf llm-wiki.tar.gz .
-          scp -i deploy-key -o StrictHostKeyChecking=yes llm-wiki.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/llm-wiki.tar.gz"
-          ssh -i deploy-key -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH' && tar -xzf /tmp/llm-wiki.tar.gz -C '$DEPLOY_PATH' && cd '$DEPLOY_PATH' && docker compose -f docker-compose.production.yml up -d --build"
+          scp -i deploy-key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=yes llm-wiki.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/llm-wiki.tar.gz"
+          ssh -i deploy-key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH' && tar -xzf /tmp/llm-wiki.tar.gz -C '$DEPLOY_PATH' && cd '$DEPLOY_PATH' && docker compose -f docker-compose.production.yml up -d --build"

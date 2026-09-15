@@ -13,6 +13,7 @@ from mcp.types import ToolAnnotations
 from .service import episode_json, list_projects, read_page, run_wiki
 from .auth import AuthService, AuthStore
 from .remote_mcp import create_remote_mcp
+from .remote_service import RemoteWikiService
 from .shared_service import SharedWikiService
 from .store import SharedWikiStore
 
@@ -39,6 +40,7 @@ def create_company_mcp() -> FastMCP:
     database = database_path()
     auth = AuthService(AuthStore(database))
     shared = SharedWikiService(SharedWikiStore(database))
+    local = RemoteWikiService()
     return create_remote_mcp(
         auth,
         shared.status,
@@ -47,6 +49,7 @@ def create_company_mcp() -> FastMCP:
         read_versions=shared.versions,
         submit_update=shared.submit,
         restore_page=shared.restore,
+        organize_local=local.organize_local,
     )
 
 READ_ONLY = ToolAnnotations(

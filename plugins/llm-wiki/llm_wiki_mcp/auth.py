@@ -229,6 +229,8 @@ class AuthStore:
 
     def apply_event(self, event_id: str, identity: dict[str, Any], sequence: int) -> str:
         event_id = _required_text(event_id, "event_id", 160)
+        if not isinstance(sequence, int) or sequence < 0:
+            raise AuthError("Member event sequence must be a non-negative integer.")
         subject = _required_text(identity.get("subject", identity.get("sub")), "subject")
         enabled = bool(identity.get("enabled", identity.get("active", True)))
         current = _now()
@@ -258,14 +260,29 @@ class AuthStore:
         return "applied"
 
     def reconcile(self, identities: Iterable[dict[str, Any]]) -> int:
+        identities = list(identities)
         changed = 0
+        seen_subjects = set()
         for identity in identities:
             subject = _required_text(identity.get("subject", identity.get("sub")), "subject")
+            seen_subjects.add(subject)
             current = self.member(subject)
             enabled = bool(identity.get("enabled", identity.get("active", True)))
             if not current or current["enabled"] != enabled or current["email"] != str(identity.get("email", "") or "") or current["name"] != str(identity.get("name", "") or ""):
                 self.upsert_member(identity, sequence=(current or {}).get("sequence", 0) + 1)
                 changed += 1
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute("SELECT subject, sequence FROM members WHERE enabled = 1").fetchall()
+            for row in rows:
+                if row["subject"] in seen_subjects:
+                    continue
+                db.execute(
+                    "UPDATE members SET enabled = 0, sequence = ?, updated_at = ? WHERE subject = ?",
+                    (int(row["sequence"]) + 1, _now(), row["subject"]),
+                )
+                changed += 1
+            db.commit()
         return changed
 
 
@@ -347,6 +364,10 @@ class AuthService:
             raise AuthError("Authorization code is invalid.")
         identity = self.provider.exchange_code(code)
         self.store.consume_authorization_code(code)
+        subject = _required_text(identity.get("subject", identity.get("sub")), "subject")
+        existing = self.store.member(subject)
+        if existing and not existing["enabled"]:
+            raise AuthError("Menti member is disabled.")
         member = self.store.upsert_member(identity)
         if not member.get("enabled"):
             raise AuthError("Menti member is disabled.")

@@ -53,6 +53,26 @@ class SharedServiceTests(unittest.TestCase):
         self.assertEqual(self.store.get_page("shared-guide")["page"]["body"], "Second body")
         self.assertEqual(self.store.page_versions("shared-guide")["versions"][-1]["status"], "superseded")
 
+    def test_retry_after_a_new_version_returns_original_result_without_regenerating(self):
+        calls = 0
+
+        def model(payload, purpose, pages):
+            nonlocal calls
+            calls += 1
+            return {"pages": [{"slug": "guide", "title": "Guide", "type": "guide", "status": "current", "tags": [], "summary": "Guide", "body": "Stable result", "sources": ["conversation:retry"]}]}
+
+        service = SharedWikiService(self.store, model)
+        materials = [{"source_id": "conversation:retry", "content": "Retry this"}]
+        first = service.submit("member-a", 0, "retry-key", materials, "Capture")
+        self.store.commit_update("member-b", 1, "other", [{"source_id": "conversation:other", "content": "Other"}], {
+            "schema_version": 1,
+            "pages": [{"slug": "other", "title": "Other", "type": "guide", "status": "current", "tags": [], "summary": "Other", "body": "Other", "sources": ["conversation:other"]}],
+            "source_ids": ["conversation:other"],
+        })
+        retry = service.submit("member-a", 0, "retry-key", materials, "Capture")
+        self.assertEqual(retry, {**first, "actor_subject": "member-a"})
+        self.assertEqual(calls, 1)
+
     def test_model_failure_does_not_mutate_shared_state(self):
         self.store.commit_update("member-a", 0, "first", [{"source_id": "conversation:first", "content": "First"}], {
             "schema_version": 1,
@@ -107,6 +127,10 @@ class SharedServiceTests(unittest.TestCase):
         self.assertEqual(history[0]["action"], "restore")
         self.assertEqual(history[0]["actor_subject"], "member-c")
         self.assertEqual(self.store.audit_log()[0]["action"], "restore")
+        history_entry = history[0]
+        self.assertEqual(history_entry["before_version"], 2)
+        self.assertEqual(history_entry["after_version"], 3)
+        self.assertIn("Restored page", history_entry["audit_summary"])
 
 
 if __name__ == "__main__":

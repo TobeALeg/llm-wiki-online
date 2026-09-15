@@ -36,12 +36,24 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-def _request_hash(base_version: int, materials: list[dict[str, str]], update: dict[str, Any]) -> str:
+def _request_hash(base_version: int, materials: list[dict[str, str]], update: dict[str, Any], purpose: str = "") -> str:
     material_fingerprints = [
         {"source_id": item["source_id"], "kind": item["kind"], "label": item["label"], "sha256": hashlib.sha256(item["content"].encode("utf-8")).hexdigest()}
         for item in materials
     ]
-    payload = {"base_version": base_version, "materials": material_fingerprints, "update": update}
+    canonical_update = dict(update)
+    canonical_update["pages"] = [{key: value for key, value in page.items() if key != "updated_at"} for page in update["pages"]]
+    # updated_at is assigned while validating a package, so it is not part of the request identity.
+    payload = {"base_version": base_version, "materials": material_fingerprints, "purpose": purpose, "update": canonical_update}
+    return hashlib.sha256(_json(payload).encode("utf-8")).hexdigest()
+
+
+def _intent_hash(base_version: int, materials: list[dict[str, str]], purpose: str = "") -> str:
+    material_fingerprints = [
+        {"source_id": item["source_id"], "kind": item["kind"], "label": item["label"], "sha256": hashlib.sha256(item["content"].encode("utf-8")).hexdigest()}
+        for item in materials
+    ]
+    payload = {"base_version": base_version, "materials": material_fingerprints, "purpose": purpose}
     return hashlib.sha256(_json(payload).encode("utf-8")).hexdigest()
 
 
@@ -129,11 +141,15 @@ class SharedWikiStore:
                 CREATE TABLE IF NOT EXISTS wiki_submissions (
                     idempotency_key TEXT PRIMARY KEY,
                     request_hash TEXT NOT NULL,
+                    intent_hash TEXT,
                     result_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
                 """
             )
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(wiki_submissions)")}
+            if "intent_hash" not in columns:
+                db.execute("ALTER TABLE wiki_submissions ADD COLUMN intent_hash TEXT")
 
     def current_version(self) -> int:
         with self._db() as db:
@@ -160,8 +176,14 @@ class SharedWikiStore:
 
     def list_pages(self) -> dict[str, Any]:
         with self._db() as db:
-            version = int(db.execute("SELECT value FROM wiki_meta WHERE key = 'current_version'").fetchone()["value"])
-            rows = db.execute("SELECT * FROM wiki_pages ORDER BY lower(title), slug").fetchall()
+            db.execute("BEGIN")
+            try:
+                version = int(db.execute("SELECT value FROM wiki_meta WHERE key = 'current_version'").fetchone()["value"])
+                rows = db.execute("SELECT * FROM wiki_pages ORDER BY lower(title), slug").fetchall()
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
         return {"version": version, "pages": [self._page(row) for row in rows]}
 
     def search_pages(self, query: str, limit: int = 20) -> dict[str, Any]:
@@ -170,8 +192,14 @@ class SharedWikiStore:
             raise StoreError("Search query exceeds 200 characters.")
         tokens = [token for token in query.split() if token]
         with self._db() as db:
-            version = int(db.execute("SELECT value FROM wiki_meta WHERE key = 'current_version'").fetchone()["value"])
-            rows = db.execute("SELECT * FROM wiki_pages").fetchall()
+            db.execute("BEGIN")
+            try:
+                version = int(db.execute("SELECT value FROM wiki_meta WHERE key = 'current_version'").fetchone()["value"])
+                rows = db.execute("SELECT * FROM wiki_pages").fetchall()
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
         ranked = []
         for row in rows:
             text = " ".join((row["title"], row["summary"], row["body"], row["tags_json"])).lower()
@@ -185,9 +213,36 @@ class SharedWikiStore:
         if not isinstance(slug, str) or not __import__("re").fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug):
             raise StoreError("Invalid page slug.")
         with self._db() as db:
-            version = int(db.execute("SELECT value FROM wiki_meta WHERE key = 'current_version'").fetchone()["value"])
-            row = db.execute("SELECT * FROM wiki_pages WHERE slug = ?", (slug,)).fetchone()
+            db.execute("BEGIN")
+            try:
+                version = int(db.execute("SELECT value FROM wiki_meta WHERE key = 'current_version'").fetchone()["value"])
+                row = db.execute("SELECT * FROM wiki_pages WHERE slug = ?", (slug,)).fetchone()
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
         return {"version": version, "page": self._page(row) if row else None}
+
+    def intent_hash(self, base_version: int, materials: Iterable[Any], purpose: str = "") -> str:
+        if not isinstance(base_version, int) or base_version < 0:
+            raise StoreError("base_version must be a non-negative integer.")
+        try:
+            normalized_materials = normalize_materials(materials)
+        except CoreError as exc:
+            raise StoreError(str(exc)) from exc
+        purpose = str(purpose or "").strip()
+        if len(purpose) > 8_000:
+            raise StoreError("purpose exceeds the 8000 character limit.")
+        return _intent_hash(base_version, normalized_materials, purpose)
+
+    def submission(self, idempotency_key: str) -> dict[str, Any] | None:
+        if not isinstance(idempotency_key, str) or not __import__("re").fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", idempotency_key):
+            raise StoreError("idempotency_key must be a short stable identifier.")
+        with self._db() as db:
+            row = db.execute("SELECT request_hash, intent_hash, result_json FROM wiki_submissions WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
+        if not row:
+            return None
+        return {"request_hash": row["request_hash"], "intent_hash": row["intent_hash"], "result": json.loads(row["result_json"])}
 
     def commit_update(
         self,
@@ -196,6 +251,8 @@ class SharedWikiStore:
         idempotency_key: str,
         materials: Iterable[Any],
         update: dict[str, Any],
+        *,
+        purpose: str = "",
     ) -> dict[str, Any]:
         if not actor_subject or len(actor_subject) > 240:
             raise StoreError("A verified actor subject is required.")
@@ -207,13 +264,17 @@ class SharedWikiStore:
             normalized_materials = normalize_materials(materials)
         except CoreError as exc:
             raise StoreError(str(exc)) from exc
+        purpose = str(purpose or "").strip()
+        if len(purpose) > 8_000:
+            raise StoreError("purpose exceeds the 8000 character limit.")
         with self._db() as db:
             allowed_sources = self._known_source_ids(db) | {item["source_id"] for item in normalized_materials}
             try:
                 normalized_update = validate_update_package(update, allowed_sources)
             except CoreError as exc:
                 raise StoreError(str(exc)) from exc
-            request_hash = _request_hash(base_version, normalized_materials, normalized_update)
+            request_hash = _request_hash(base_version, normalized_materials, normalized_update, purpose)
+            intent_hash = _intent_hash(base_version, normalized_materials, purpose)
             db.execute("BEGIN IMMEDIATE")
             existing = db.execute("SELECT request_hash, result_json FROM wiki_submissions WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
             if existing:
@@ -264,7 +325,7 @@ class SharedWikiStore:
             db.execute("INSERT INTO wiki_audits(version, action, actor_subject, summary, source_ids_json, before_version, after_version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (new_version, "update", actor_subject, summary, _json(source_ids), current, new_version, created_at))
             db.execute("UPDATE wiki_meta SET value = ? WHERE key = 'current_version'", (str(new_version),))
             result = {"version": new_version, "changed_pages": changed, "idempotency_key": idempotency_key}
-            db.execute("INSERT INTO wiki_submissions(idempotency_key, request_hash, result_json, created_at) VALUES (?, ?, ?, ?)", (idempotency_key, request_hash, _json(result), created_at))
+            db.execute("INSERT INTO wiki_submissions(idempotency_key, request_hash, intent_hash, result_json, created_at) VALUES (?, ?, ?, ?, ?)", (idempotency_key, request_hash, intent_hash, _json(result), created_at))
             db.commit()
             return result
 
@@ -273,11 +334,22 @@ class SharedWikiStore:
         with self._db() as db:
             current = db.execute("SELECT version FROM wiki_pages WHERE slug = ?", (slug,)).fetchone()
             current_version = int(current["version"]) if current else None
-            rows = db.execute("SELECT id, version, slug, title, type, status, tags_json, summary, source_ids_json, actor_subject, action, created_at, previous_version FROM wiki_versions WHERE slug = ? ORDER BY version DESC, id DESC", (slug,)).fetchall()
+            rows = db.execute(
+                """
+                SELECT v.id, v.version, v.slug, v.title, v.type, v.status, v.tags_json,
+                       v.summary, v.source_ids_json, v.actor_subject, v.action,
+                       v.created_at, v.previous_version, a.summary AS audit_summary,
+                       a.before_version, a.after_version
+                FROM wiki_versions AS v
+                LEFT JOIN wiki_audits AS a ON a.version = v.version AND a.action = v.action
+                WHERE v.slug = ? ORDER BY v.version DESC, v.id DESC
+                """,
+                (slug,),
+            ).fetchall()
         return {
             "slug": slug,
             "versions": [{
-                "id": row["id"], "version": row["version"], "title": row["title"], "type": row["type"], "status": row["status"] if row["version"] == current_version else ("superseded" if row["status"] == "current" else row["status"]), "tags": json.loads(row["tags_json"]), "summary": row["summary"], "sources": json.loads(row["source_ids_json"]), "actor_subject": row["actor_subject"], "action": row["action"], "created_at": row["created_at"], "previous_version": row["previous_version"],
+                "id": row["id"], "version": row["version"], "title": row["title"], "type": row["type"], "status": row["status"] if row["version"] == current_version else ("superseded" if row["status"] == "current" else row["status"]), "tags": json.loads(row["tags_json"]), "summary": row["summary"], "audit_summary": row["audit_summary"] or "", "sources": json.loads(row["source_ids_json"]), "actor_subject": row["actor_subject"], "action": row["action"], "created_at": row["created_at"], "previous_version": row["previous_version"], "before_version": row["before_version"], "after_version": row["after_version"],
             } for row in rows],
         }
 

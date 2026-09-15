@@ -5,6 +5,8 @@ services:
     env_file: .env.production
     environment:
       LLM_WIKI_DATABASE: /var/lib/llm-wiki/lw.sqlite3
+    ports:
+      - "127.0.0.1:8000:8000"
     volumes:
       - lw-data:/var/lib/llm-wiki
     restart: unless-stopped
@@ -21,6 +23,8 @@ services:
     environment:
       LLM_WIKI_REMOTE: "true"
       LLM_WIKI_DATABASE: /var/lib/llm-wiki/lw.sqlite3
+    ports:
+      - "127.0.0.1:4310:4310"
     volumes:
       - lw-data:/var/lib/llm-wiki
     restart: unless-stopped

@@ -47,7 +47,14 @@ class RemoteMcpTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {"LLM_WIKI_DATABASE": str(Path(self.temporary.name) / "company.sqlite3")}, clear=False):
             server = create_company_mcp()
         names = set(server._tool_manager._tools)
-        self.assertTrue({"company_wiki_status", "company_wiki_search", "company_wiki_page", "company_wiki_submit", "company_wiki_versions", "company_wiki_restore"} <= names)
+        self.assertTrue({"company_wiki_status", "company_wiki_search", "company_wiki_page", "company_wiki_submit", "company_wiki_versions", "company_wiki_restore", "local_wiki_organize"} <= names)
+
+    def test_local_mcp_tool_has_no_storage_callback(self):
+        calls = []
+        server = create_remote_mcp(self.auth, lambda subject: {"subject": subject}, organize_local=lambda materials, pages, purpose: calls.append((materials, pages, purpose)) or {"pages": []})
+        tool = server._tool_manager._tools["local_wiki_organize"]
+        self.assertNotIn("subject", tool.parameters["properties"])
+        self.assertIn("materials", tool.parameters["properties"])
 
 
 if __name__ == "__main__":

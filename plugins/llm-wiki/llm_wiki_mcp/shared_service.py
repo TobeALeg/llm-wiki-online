@@ -6,7 +6,7 @@ from typing import Any, Iterable
 
 from .core import Model, WikiCore
 from .model import configured_model
-from .store import SharedWikiStore
+from .store import IdempotencyError, SharedWikiStore
 
 
 class SharedWikiService:
@@ -41,16 +41,17 @@ class SharedWikiService:
         """Organize against a snapshot, then commit only if its base still matches."""
 
         material_list = list(materials)
+        if update is None:
+            existing_submission = self.store.submission(idempotency_key)
+            if existing_submission and existing_submission["intent_hash"] is not None:
+                if existing_submission["intent_hash"] != self.store.intent_hash(base_version, material_list, purpose):
+                    raise IdempotencyError("Idempotency key was already used for a different request.")
+                result = existing_submission["result"]
+                result["actor_subject"] = actor_subject
+                return result
         snapshot = self.store.list_pages()
-        if base_version != snapshot["version"]:
-            from .store import ConflictError
-
-            raise ConflictError(
-                f"Wiki changed since base_version {base_version}; retry from version {snapshot['version']}.",
-                current_version=snapshot["version"],
-            )
         package = update or self.core.organize(material_list, snapshot["pages"], purpose)
-        result = self.store.commit_update(actor_subject, base_version, idempotency_key, material_list, package)
+        result = self.store.commit_update(actor_subject, base_version, idempotency_key, material_list, package, purpose=purpose)
         result["actor_subject"] = actor_subject
         return result
 

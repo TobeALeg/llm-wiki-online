@@ -15,7 +15,7 @@ from llm_wiki_mcp.auth import AuthError, AuthService, AuthStore  # noqa: E402
 from llm_wiki_mcp.remote_service import RemoteWikiService  # noqa: E402
 from llm_wiki_mcp.shared_service import SharedWikiService  # noqa: E402
 from llm_wiki_mcp.store import SharedWikiStore  # noqa: E402
-from llm_wiki_mcp.webapp import WikiWebApp  # noqa: E402
+from llm_wiki_mcp.webapp import NotFoundError, WikiWebApp  # noqa: E402
 
 
 class WebAppTests(unittest.TestCase):
@@ -56,9 +56,11 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(result["pages"][0]["slug"], "welcome")
 
     def test_submit_search_detail_and_local_mode(self):
-        status, result = self.request("POST", "/api/wiki/submit", {"base_version": 0, "idempotency_key": "web-1", "purpose": "Capture", "materials": [{"source_id": "conversation:welcome", "content": "Welcome"}]})
-        self.assertEqual(status, 200)
-        self.assertEqual(result["version"], 1)
+        self.store.commit_update("member-1", 0, "mcp-1", [{"source_id": "conversation:welcome", "content": "Welcome"}], {
+            "schema_version": 1,
+            "pages": [{"slug": "welcome", "title": "Welcome", "type": "guide", "status": "current", "tags": [], "summary": "A welcome page", "body": "Welcome", "sources": ["conversation:welcome"]}],
+            "source_ids": ["conversation:welcome"],
+        })
         status, result = self.request("GET", "/api/wiki/search?q=welcome")
         self.assertEqual(status, 200)
         self.assertEqual(result["pages"][0]["slug"], "welcome")
@@ -117,6 +119,12 @@ class WebAppTests(unittest.TestCase):
             self.auth.authenticate_session(login)
         with self.assertRaises(AuthError):
             self.auth.authenticate_mcp_token(token)
+
+    def test_headers_are_case_insensitive_and_missing_versions_are_not_found(self):
+        status, _, _ = self.app.get("/api/wiki/status", {"authorization": f"Bearer {self.auth.issue_mcp_token(self.session)['access_token']}"})
+        self.assertEqual(status, 200)
+        with self.assertRaises(NotFoundError):
+            self.app.get("/api/wiki/pages/missing/versions", {"COOKIE": f"lw_session={self.session}"})
 
 
 if __name__ == "__main__":

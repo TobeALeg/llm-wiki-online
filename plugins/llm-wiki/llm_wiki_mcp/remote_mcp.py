@@ -51,6 +51,7 @@ def create_remote_mcp(
     read_versions: Callable[[str, str], dict[str, Any]] | None = None,
     submit_update: Callable[..., dict[str, Any]] | None = None,
     restore_page: Callable[..., dict[str, Any]] | None = None,
+    organize_local: Callable[..., dict[str, Any]] | None = None,
 ) -> FastMCP:
     """Create the protected `/mcp` server and register its first read seam."""
 
@@ -124,5 +125,15 @@ def create_remote_mcp(
         )
         def company_wiki_restore(slug: str, version_id: int, base_version: int, idempotency_key: str, ctx: Context = None) -> dict[str, Any]:
             return restore_page(context_subject(), slug, version_id, base_version, idempotency_key)
+
+    if organize_local:
+        @server.tool(
+            name="local_wiki_organize",
+            title="Organize selected local Wiki material",
+            description="Return a validated Wiki update package without persisting the selected material or result on this service.",
+        )
+        def local_wiki_organize(materials: list[dict[str, Any]], existing_pages: list[dict[str, Any]], purpose: str, ctx: Context = None) -> dict[str, Any]:
+            context_subject()
+            return organize_local(materials, existing_pages, purpose)
 
     return server

@@ -104,3 +104,10 @@ The local MCP server and `tunnel-client` must both remain running while ChatGPT 
 - `lint_wiki`
 
 `save_episode` records selected conversation knowledge without paying for a model call. `update_wiki` consolidates pending project files and episodes with DeepSeek. The default model is `deepseek-flash`; override it with `LLM_WIKI_MODEL` or the API base with `LLM_WIKI_BASE_URL`.
+
+The protected company MCP additionally exposes `local_wiki_organize` for a
+selected local material set (it returns a validated package without writing to
+the company database), plus `company_wiki_status`, `company_wiki_search`,
+`company_wiki_page`, `company_wiki_versions`, `company_wiki_submit`, and
+`company_wiki_restore`. Browser access is read-only; company writes go through
+the authenticated MCP tools.

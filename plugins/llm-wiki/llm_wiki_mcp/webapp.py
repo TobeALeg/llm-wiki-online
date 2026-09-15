@@ -126,12 +126,17 @@ class WikiWebApp:
     def server(self, host: str = "127.0.0.1", port: int = 8000) -> WikiHTTPServer:
         return WikiHTTPServer((host, port), WikiRequestHandler, self)
 
+    @staticmethod
+    def _header(headers: dict[str, str], name: str) -> str:
+        wanted = name.lower()
+        return next((value for key, value in headers.items() if key.lower() == wanted), "")
+
     def _member(self, headers: dict[str, str]) -> dict[str, Any]:
-        authorization = headers.get("Authorization", "")
+        authorization = self._header(headers, "Authorization")
         if authorization.lower().startswith("bearer "):
             return self.auth.authenticate_mcp_token(authorization[7:].strip())
         cookies = {}
-        for item in headers.get("Cookie", "").split(";"):
+        for item in self._header(headers, "Cookie").split(";"):
             if "=" in item:
                 key, value = item.strip().split("=", 1)
                 cookies[key] = value
@@ -171,7 +176,7 @@ class WikiWebApp:
         if route == "/auth/callback":
             query = urllib.parse.parse_qs(parsed.query)
             state = query.get("state", [""])[0]
-            cookie_state = next((value.split("=", 1)[1] for value in headers.get("Cookie", "").split(";") if value.strip().startswith("lw_oauth_state=")), "")
+            cookie_state = next((value.split("=", 1)[1] for value in self._header(headers, "Cookie").split(";") if value.strip().startswith("lw_oauth_state=")), "")
             if not cookie_state or not hmac.compare_digest(cookie_state, state):
                 raise AuthError("OAuth state is invalid.")
             self.auth.store.consume_state(state)
@@ -196,6 +201,8 @@ class WikiWebApp:
             return self.response(200, result)
         match = re.fullmatch(r"/api/wiki/pages/([a-z0-9]+(?:-[a-z0-9]+)*)/versions", route)
         if match:
+            if self.shared.page(member["subject"], match.group(1))["page"] is None:
+                raise NotFoundError("Wiki page does not exist.")
             return self.response(200, self.shared.versions(member["subject"], match.group(1)))
         if route == "/api/me":
             return self.response(200, {"member": member})
@@ -204,7 +211,7 @@ class WikiWebApp:
     def post(self, path: str, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, str], bytes]:
         if path == "/webhooks/menti/members":
             secret = os.environ.get("MENTI_WEBHOOK_SECRET", "")
-            if not AuthService.verify_webhook(secret, body, headers.get("X-Menti-Signature", "")):
+            if not AuthService.verify_webhook(secret, body, self._header(headers, "X-Menti-Signature")):
                 raise AuthError("Webhook signature is invalid.")
             payload = self._json(body)
             event = payload
@@ -213,16 +220,11 @@ class WikiWebApp:
         member = self._member(headers)
         payload = self._json(body)
         if path == "/api/mcp-token":
-            session = headers.get("Cookie", "")
+            session = self._header(headers, "Cookie")
             token = next((value.split("=", 1)[1] for value in session.split(";") if value.strip().startswith("lw_session=")), "")
             return self.response(200, self.auth.issue_mcp_token(token))
         if path == "/api/local/organize":
             return self.response(200, self.local.organize_local(payload.get("materials", []), payload.get("existing_pages", []), payload.get("purpose", "")))
-        if path == "/api/wiki/submit":
-            return self.response(200, self.shared.submit(member["subject"], payload.get("base_version"), payload.get("idempotency_key", ""), payload.get("materials", []), payload.get("purpose", ""), update=payload.get("update")))
-        match = re.fullmatch(r"/api/wiki/pages/([a-z0-9]+(?:-[a-z0-9]+)*)/restore", path)
-        if match:
-            return self.response(200, self.shared.restore(member["subject"], match.group(1), payload.get("version_id"), payload.get("base_version"), payload.get("idempotency_key", "")))
         raise NotFoundError("Route does not exist.")
 
     @staticmethod
@@ -269,7 +271,7 @@ class WikiRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if length > self.server.app.max_body_bytes:
+            if length < 0 or length > self.server.app.max_body_bytes:
                 raise StoreError("Request body exceeds the configured limit.")
             body = self.rfile.read(length)
             self._finish(self.server.app.post(self.path.split("?", 1)[0], {key: value for key, value in self.headers.items()}, body))
