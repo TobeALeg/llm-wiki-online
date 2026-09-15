@@ -1,8 +1,11 @@
 import json
+import hashlib
+import hmac
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).parents[1]
@@ -73,6 +76,21 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("escapeHtml", text)
         self.assertIn("暂无已提交页面", text)
         self.assertNotIn("innerHTML = page.body", text)
+
+    def test_signed_disable_webhook_invalidates_existing_credentials(self):
+        login = self.auth_store.issue_session("member-1", 3600)[0]
+        token = self.auth.issue_mcp_token(login)["access_token"]
+        payload = {"event_id": "member-disabled-1", "sequence": 2, "member": {"subject": "member-1", "name": "Former", "enabled": False}}
+        body = json.dumps(payload).encode()
+        signature = "sha256=" + hmac.new(b"webhook-secret", body, hashlib.sha256).hexdigest()
+        with mock.patch.dict("os.environ", {"MENTI_WEBHOOK_SECRET": "webhook-secret"}, clear=False):
+            status, result = self.request("POST", "/webhooks/menti/members", payload, headers={"Cookie": "", "X-Menti-Signature": signature})
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "applied")
+        with self.assertRaises(AuthError):
+            self.auth.authenticate_session(login)
+        with self.assertRaises(AuthError):
+            self.auth.authenticate_mcp_token(token)
 
 
 if __name__ == "__main__":

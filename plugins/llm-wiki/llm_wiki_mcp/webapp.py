@@ -190,6 +190,14 @@ class WikiWebApp:
         raise NotFoundError("Route does not exist.")
 
     def post(self, path: str, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, str], bytes]:
+        if path == "/webhooks/menti/members":
+            secret = os.environ.get("MENTI_WEBHOOK_SECRET", "")
+            if not AuthService.verify_webhook(secret, body, headers.get("X-Menti-Signature", "")):
+                raise AuthError("Webhook signature is invalid.")
+            payload = self._json(body)
+            event = payload
+            result = self.auth.apply_member_webhook(event.get("event_id", ""), event.get("member", event), int(event.get("sequence", 0)))
+            return self.response(200, {"status": result})
         member = self._member(headers)
         payload = self._json(body)
         if path == "/api/mcp-token":
@@ -203,13 +211,6 @@ class WikiWebApp:
         match = re.fullmatch(r"/api/wiki/pages/([a-z0-9]+(?:-[a-z0-9]+)*)/restore", path)
         if match:
             return self.response(200, self.shared.restore(member["subject"], match.group(1), payload.get("version_id"), payload.get("base_version"), payload.get("idempotency_key", "")))
-        if path == "/webhooks/menti/members":
-            secret = os.environ.get("MENTI_WEBHOOK_SECRET", "")
-            if not AuthService.verify_webhook(secret, body, headers.get("X-Menti-Signature", "")):
-                raise AuthError("Webhook signature is invalid.")
-            event = payload
-            result = self.auth.apply_member_webhook(event.get("event_id", ""), event.get("member", event), int(event.get("sequence", 0)))
-            return self.response(200, {"status": result})
         raise NotFoundError("Route does not exist.")
 
     @staticmethod
@@ -262,4 +263,3 @@ class WikiRequestHandler(BaseHTTPRequestHandler):
             self._finish(self.server.app.post(self.path.split("?", 1)[0], {key: value for key, value in self.headers.items()}, body))
         except Exception as exc:
             self._finish(self._error(exc))
-
