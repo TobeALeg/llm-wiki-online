@@ -284,16 +284,22 @@ class SharedWikiStore:
     def restore_page(self, actor_subject: str, slug: str, version_id: int, base_version: int, idempotency_key: str) -> dict[str, Any]:
         if not isinstance(version_id, int) or version_id < 1:
             raise StoreError("version_id must be a positive integer.")
+        if not isinstance(idempotency_key, str) or not __import__("re").fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", idempotency_key):
+            raise StoreError("idempotency_key must be a short stable identifier.")
+        request_hash = hashlib.sha256(_json({"slug": slug, "version_id": version_id, "base_version": base_version}).encode("utf-8")).hexdigest()
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
+            old_submission = db.execute("SELECT request_hash, result_json FROM wiki_submissions WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
+            if old_submission:
+                if old_submission["request_hash"] != request_hash:
+                    db.rollback()
+                    raise IdempotencyError("Idempotency key was already used for a different request.")
+                db.commit()
+                return json.loads(old_submission["result_json"])
             current = int(db.execute("SELECT value FROM wiki_meta WHERE key = 'current_version'").fetchone()["value"])
             if base_version != current:
                 db.rollback()
                 raise ConflictError(f"Wiki changed since base_version {base_version}; retry from version {current}.", current_version=current)
-            old_submission = db.execute("SELECT result_json FROM wiki_submissions WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
-            if old_submission:
-                db.commit()
-                return json.loads(old_submission["result_json"])
             historical = db.execute("SELECT * FROM wiki_versions WHERE id = ? AND slug = ?", (version_id, slug)).fetchone()
             if not historical:
                 db.rollback()
@@ -313,7 +319,6 @@ class SharedWikiStore:
             db.execute("INSERT INTO wiki_audits(version, action, actor_subject, summary, source_ids_json, before_version, after_version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (new_version, "restore", actor_subject, summary, historical["source_ids_json"], current, new_version, created_at))
             db.execute("UPDATE wiki_meta SET value=? WHERE key='current_version'", (str(new_version),))
             result = {"version": new_version, "changed_pages": [slug], "restored_version_id": version_id, "idempotency_key": idempotency_key}
-            request_hash = hashlib.sha256(_json({"slug": slug, "version_id": version_id, "base_version": base_version}).encode("utf-8")).hexdigest()
             db.execute("INSERT INTO wiki_submissions(idempotency_key, request_hash, result_json, created_at) VALUES (?, ?, ?, ?)", (idempotency_key, request_hash, _json(result), created_at))
             db.commit()
             return result

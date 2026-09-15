@@ -91,6 +91,23 @@ class SharedServiceTests(unittest.TestCase):
         self.assertEqual(sum(isinstance(item, ConflictError) for item in outcomes), 1)
         self.assertEqual(self.store.current_version(), 2)
 
+    def test_restore_creates_new_audited_version_without_rewriting_history(self):
+        first = {"schema_version": 1, "pages": [{"slug": "guide", "title": "Guide", "type": "guide", "status": "current", "tags": [], "summary": "First", "body": "First body", "sources": ["conversation:first"]}], "source_ids": ["conversation:first"]}
+        second = {"schema_version": 1, "pages": [{"slug": "guide", "title": "Guide", "type": "guide", "status": "current", "tags": [], "summary": "Second", "body": "Second body", "sources": ["conversation:second"]}], "source_ids": ["conversation:second"]}
+        self.store.commit_update("member-a", 0, "first", [{"source_id": "conversation:first", "content": "First"}], first)
+        first_version_id = self.store.page_versions("guide")["versions"][0]["id"]
+        self.store.commit_update("member-b", 1, "second", [{"source_id": "conversation:second", "content": "Second"}], second)
+        restored = self.store.restore_page("member-c", "guide", first_version_id, 2, "restore-1")
+        retry = self.store.restore_page("member-c", "guide", first_version_id, 2, "restore-1")
+        self.assertEqual(restored, retry)
+        self.assertEqual(self.store.current_version(), 3)
+        self.assertEqual(self.store.get_page("guide")["page"]["body"], "First body")
+        history = self.store.page_versions("guide")["versions"]
+        self.assertEqual(len(history), 3)
+        self.assertEqual(history[0]["action"], "restore")
+        self.assertEqual(history[0]["actor_subject"], "member-c")
+        self.assertEqual(self.store.audit_log()[0]["action"], "restore")
+
 
 if __name__ == "__main__":
     unittest.main()
