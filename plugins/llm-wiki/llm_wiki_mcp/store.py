@@ -271,11 +271,13 @@ class SharedWikiStore:
     def page_versions(self, slug: str) -> dict[str, Any]:
         self.get_page(slug)
         with self._db() as db:
+            current = db.execute("SELECT version FROM wiki_pages WHERE slug = ?", (slug,)).fetchone()
+            current_version = int(current["version"]) if current else None
             rows = db.execute("SELECT id, version, slug, title, type, status, tags_json, summary, source_ids_json, actor_subject, action, created_at, previous_version FROM wiki_versions WHERE slug = ? ORDER BY version DESC, id DESC", (slug,)).fetchall()
         return {
             "slug": slug,
             "versions": [{
-                "id": row["id"], "version": row["version"], "title": row["title"], "type": row["type"], "status": row["status"], "tags": json.loads(row["tags_json"]), "summary": row["summary"], "sources": json.loads(row["source_ids_json"]), "actor_subject": row["actor_subject"], "action": row["action"], "created_at": row["created_at"], "previous_version": row["previous_version"],
+                "id": row["id"], "version": row["version"], "title": row["title"], "type": row["type"], "status": row["status"] if row["version"] == current_version else ("superseded" if row["status"] == "current" else row["status"]), "tags": json.loads(row["tags_json"]), "summary": row["summary"], "sources": json.loads(row["source_ids_json"]), "actor_subject": row["actor_subject"], "action": row["action"], "created_at": row["created_at"], "previous_version": row["previous_version"],
             } for row in rows],
         }
 
