@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import os
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from .service import episode_json, list_projects, read_page, run_wiki
+from .auth import AuthService, AuthStore
+from .remote_mcp import create_remote_mcp
+from .shared_service import SharedWikiService
+from .store import SharedWikiStore
 
 INSTRUCTIONS = (
     "Call list_projects before using a project ID. Only save durable facts selected from the "
@@ -22,6 +28,26 @@ mcp = FastMCP(
     stateless_http=True,
     json_response=True,
 )
+
+
+def database_path() -> Path:
+    configured = os.environ.get("LLM_WIKI_DATABASE", "data/lw.sqlite3")
+    return Path(configured).expanduser().resolve()
+
+
+def create_company_mcp() -> FastMCP:
+    database = database_path()
+    auth = AuthService(AuthStore(database))
+    shared = SharedWikiService(SharedWikiStore(database))
+    return create_remote_mcp(
+        auth,
+        shared.status,
+        read_search=shared.search,
+        read_page=shared.page,
+        read_versions=shared.versions,
+        submit_update=shared.submit,
+        restore_page=shared.restore,
+    )
 
 READ_ONLY = ToolAnnotations(
     readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
@@ -155,9 +181,10 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = parser().parse_args()
-    mcp.settings.host = args.host
-    mcp.settings.port = args.port
-    mcp.run(transport=args.transport)
+    selected = create_company_mcp() if os.environ.get("LLM_WIKI_REMOTE", "").lower() in {"1", "true", "yes"} else mcp
+    selected.settings.host = args.host
+    selected.settings.port = args.port
+    selected.run(transport=args.transport)
 
 
 if __name__ == "__main__":

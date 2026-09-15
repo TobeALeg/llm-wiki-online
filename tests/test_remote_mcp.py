@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).parents[1]
@@ -10,6 +11,7 @@ sys.path.insert(0, str(REPO_ROOT / "plugins" / "llm-wiki"))
 
 from llm_wiki_mcp.auth import AuthService, AuthStore  # noqa: E402
 from llm_wiki_mcp.remote_mcp import SubjectBoundTokenVerifier, create_remote_mcp  # noqa: E402
+from llm_wiki_mcp.server import create_company_mcp  # noqa: E402
 
 
 class FakeProvider:
@@ -40,6 +42,12 @@ class RemoteMcpTests(unittest.TestCase):
         self.assertNotIn("subject", tool.parameters["properties"])
         self.assertEqual(tool.parameters["properties"], {})
         self.assertEqual(server.settings.streamable_http_path, "/mcp")
+
+    def test_company_factory_registers_shared_read_and_write_tools(self):
+        with mock.patch.dict("os.environ", {"LLM_WIKI_DATABASE": str(Path(self.temporary.name) / "company.sqlite3")}, clear=False):
+            server = create_company_mcp()
+        names = set(server._tool_manager._tools)
+        self.assertTrue({"company_wiki_status", "company_wiki_search", "company_wiki_page", "company_wiki_submit", "company_wiki_versions", "company_wiki_restore"} <= names)
 
 
 if __name__ == "__main__":

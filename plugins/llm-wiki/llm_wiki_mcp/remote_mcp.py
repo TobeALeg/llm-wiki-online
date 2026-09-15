@@ -46,6 +46,11 @@ def create_remote_mcp(
     read_status: Callable[[str], dict[str, Any]],
     *,
     issuer_url: str = "https://lw.app.mentti.work",
+    read_search: Callable[[str, str, int], dict[str, Any]] | None = None,
+    read_page: Callable[[str, str], dict[str, Any]] | None = None,
+    read_versions: Callable[[str, str], dict[str, Any]] | None = None,
+    submit_update: Callable[..., dict[str, Any]] | None = None,
+    restore_page: Callable[..., dict[str, Any]] | None = None,
 ) -> FastMCP:
     """Create the protected `/mcp` server and register its first read seam."""
 
@@ -75,5 +80,49 @@ def create_remote_mcp(
     def company_wiki_status(ctx: Context) -> dict[str, Any]:
         return read_status(context_subject())
 
-    return server
+    if read_search:
+        @server.tool(
+            name="company_wiki_search",
+            title="Search shared Wiki",
+            description="Search committed shared Wiki pages for the authenticated member.",
+        )
+        def company_wiki_search(query: str, limit: int = 20, ctx: Context = None) -> dict[str, Any]:
+            return read_search(context_subject(), query, limit)
 
+    if read_page:
+        @server.tool(
+            name="company_wiki_page",
+            title="Read shared Wiki page",
+            description="Read one committed shared Wiki page by slug.",
+        )
+        def company_wiki_page(slug: str, ctx: Context = None) -> dict[str, Any]:
+            return read_page(context_subject(), slug)
+
+    if read_versions:
+        @server.tool(
+            name="company_wiki_versions",
+            title="List shared Wiki history",
+            description="List immutable versions of one shared Wiki page.",
+        )
+        def company_wiki_versions(slug: str, ctx: Context = None) -> dict[str, Any]:
+            return read_versions(context_subject(), slug)
+
+    if submit_update:
+        @server.tool(
+            name="company_wiki_submit",
+            title="Submit shared Wiki update",
+            description="Organize selected materials and atomically submit them to the shared Wiki.",
+        )
+        def company_wiki_submit(base_version: int, idempotency_key: str, materials: list[dict[str, Any]], purpose: str, ctx: Context = None) -> dict[str, Any]:
+            return submit_update(context_subject(), base_version, idempotency_key, materials, purpose)
+
+    if restore_page:
+        @server.tool(
+            name="company_wiki_restore",
+            title="Restore shared Wiki page",
+            description="Restore a historical page version as a new committed version.",
+        )
+        def company_wiki_restore(slug: str, version_id: int, base_version: int, idempotency_key: str, ctx: Context = None) -> dict[str, Any]:
+            return restore_page(context_subject(), slug, version_id, base_version, idempotency_key)
+
+    return server
