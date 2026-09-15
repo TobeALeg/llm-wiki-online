@@ -11,6 +11,7 @@ import sqlite3
 import time
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Protocol
 
@@ -53,8 +54,16 @@ class AuthStore:
         connection.execute("PRAGMA busy_timeout = 10000")
         return connection
 
+    @contextmanager
+    def _db(self):
+        connection = self._connect()
+        try:
+            yield connection
+        finally:
+            connection.close()
+
     def initialize(self) -> None:
-        with self._connect() as db:
+        with self._db() as db:
             db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS members (
@@ -98,7 +107,7 @@ class AuthStore:
     def register_authorization_code(self, code: str, ttl_seconds: int = 300) -> None:
         if not code or len(code) > 512:
             raise AuthError("Authorization code is invalid.")
-        with self._connect() as db:
+        with self._db() as db:
             db.execute(
                 "INSERT OR REPLACE INTO authorization_codes(code_hash, expires_at, used_at) VALUES (?, ?, NULL)",
                 (_hash(code), _now() + max(1, ttl_seconds)),
@@ -107,7 +116,7 @@ class AuthStore:
     def consume_authorization_code(self, code: str) -> None:
         code_hash = _hash(code)
         current = _now()
-        with self._connect() as db:
+        with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 "SELECT expires_at, used_at FROM authorization_codes WHERE code_hash = ?",
@@ -129,7 +138,7 @@ class AuthStore:
 
     def issue_state(self, ttl_seconds: int = 300) -> str:
         state = secrets.token_urlsafe(32)
-        with self._connect() as db:
+        with self._db() as db:
             db.execute(
                 "INSERT INTO oauth_states(state_hash, expires_at) VALUES (?, ?)",
                 (_hash(state), _now() + max(1, ttl_seconds)),
@@ -138,7 +147,7 @@ class AuthStore:
 
     def consume_state(self, state: str) -> None:
         state_hash = _hash(state)
-        with self._connect() as db:
+        with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 "SELECT expires_at FROM oauth_states WHERE state_hash = ?",
@@ -155,7 +164,7 @@ class AuthStore:
         name = str(identity.get("name", "") or "").strip()[:240]
         enabled = bool(identity.get("enabled", identity.get("active", True)))
         current = _now()
-        with self._connect() as db:
+        with self._db() as db:
             row = db.execute("SELECT sequence FROM members WHERE subject = ?", (subject,)).fetchone()
             old_sequence = int(row["sequence"]) if row else 0
             new_sequence = max(old_sequence, int(sequence or 0))
@@ -175,7 +184,7 @@ class AuthStore:
         return self.member(subject) or {}
 
     def member(self, subject: str) -> dict[str, Any] | None:
-        with self._connect() as db:
+        with self._db() as db:
             row = db.execute("SELECT * FROM members WHERE subject = ?", (subject,)).fetchone()
         if not row:
             return None
@@ -184,21 +193,21 @@ class AuthStore:
     def issue_session(self, subject: str, ttl_seconds: int) -> tuple[str, int]:
         token = secrets.token_urlsafe(32)
         expires = _now() + max(1, ttl_seconds)
-        with self._connect() as db:
+        with self._db() as db:
             db.execute("INSERT INTO sessions(token_hash, subject, expires_at) VALUES (?, ?, ?)", (_hash(token), subject, expires))
         return token, expires
 
     def issue_mcp_token(self, subject: str, ttl_seconds: int) -> tuple[str, int]:
         token = secrets.token_urlsafe(40)
         expires = _now() + max(1, ttl_seconds)
-        with self._connect() as db:
+        with self._db() as db:
             db.execute("INSERT INTO mcp_tokens(token_hash, subject, expires_at, revoked_at) VALUES (?, ?, ?, NULL)", (_hash(token), subject, expires))
         return token, expires
 
     def _subject_for_token(self, table: str, token: str) -> str | None:
         if table not in {"sessions", "mcp_tokens"}:
             raise AuthError("Invalid token table.")
-        with self._connect() as db:
+        with self._db() as db:
             if table == "sessions":
                 row = db.execute("SELECT subject, expires_at FROM sessions WHERE token_hash = ?", (_hash(token),)).fetchone()
             else:
@@ -214,7 +223,7 @@ class AuthStore:
         return self._subject_for_token("mcp_tokens", token)
 
     def revoke_mcp_token(self, token: str) -> None:
-        with self._connect() as db:
+        with self._db() as db:
             db.execute("UPDATE mcp_tokens SET revoked_at = ? WHERE token_hash = ?", (_now(), _hash(token)))
 
     def apply_event(self, event_id: str, identity: dict[str, Any], sequence: int) -> str:
@@ -222,7 +231,7 @@ class AuthStore:
         subject = _required_text(identity.get("subject", identity.get("sub")), "subject")
         enabled = bool(identity.get("enabled", identity.get("active", True)))
         current = _now()
-        with self._connect() as db:
+        with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT 1 FROM webhook_events WHERE event_id = ?", (event_id,)).fetchone():
                 db.rollback()
@@ -350,4 +359,3 @@ class AuthService:
 
     def reconcile_members(self, identities: Iterable[dict[str, Any]]) -> int:
         return self.store.reconcile(identities)
-
