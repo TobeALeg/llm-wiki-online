@@ -1,6 +1,10 @@
-# LLM Wiki plugin and local MCP server
+# LLM Wiki plugin, shared service, and local MCP server
 
-This plugin exposes project-scoped LLM Wikis to Codex over stdio and to ChatGPT through a private MCP tunnel. Project files remain local. A project must be added to the local allowlist before any MCP tool can access it. Its single bundled skill keeps the explicit `/lw` name.
+This plugin exposes project-scoped local Wikis to Codex over stdio and a protected
+company Wiki over Streamable HTTP MCP. Project files remain local. The local
+allowlist is used by local tools; the company service accepts selected content and
+never a caller-provided server path. Its single bundled skill keeps the explicit
+`/lw` name.
 
 ## Install
 
@@ -55,6 +59,21 @@ llm-wiki-mcp --transport streamable-http --host 127.0.0.1 --port 4310
 ```
 
 The endpoint is `http://127.0.0.1:4310/mcp`. It intentionally binds to loopback and has no application-level authentication; do not bind it to a public interface.
+
+## Run the protected company service
+
+Set `LLM_WIKI_REMOTE=true`, `LLM_WIKI_DATABASE` and the Menti/model variables from
+`.env.production.example`, then start the two entry points:
+
+```bash
+llm-wiki-web --host 127.0.0.1 --port 8000
+llm-wiki-mcp --transport streamable-http --host 127.0.0.1 --port 4310
+```
+
+The browser API and `/mcp` share one SQLite database. The first login uses the
+Menti authorization-code callback; an authenticated member then obtains a short-
+lived, revocable MCP Bearer credential from `/api/mcp-token`. No subject or email
+argument can override its identity.
 
 ## Connect ChatGPT web privately
 

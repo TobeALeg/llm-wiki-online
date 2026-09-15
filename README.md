@@ -10,7 +10,9 @@ LLM Wiki 将项目文件和经过选择的 Agent 对话整理成带来源记录�
 - `tests/test_llm_wiki_mcp.py`：本地 MCP 服务的行为测试。
 - `.scratch/lw-remote-shared-wiki/spec.md`：远程 MCP、公司共享 Wiki 和在线浏览规格。
 
-远程服务、Menti 身份接入、公司 Wiki 持久化和在线前端尚未实施；spec 是实施依据，不代表已经部署。
+远程服务、Menti 身份接入、公司 Wiki 持久化和在线阅读路径已按 ticket 实施；
+真实身份、DNS/TLS、服务器部署和真实材料验收仍需按 [`docs/operations.md`](docs/operations.md)
+在目标环境执行，不应把本地模拟测试当成线上发布证明。
 
 当前已包含本地 MCP 服务，可通过 stdio 连接 Codex，也可以绑定到本机 loopback HTTP 端口供本地 tunnel 使用。它不是远程公司 Wiki 服务，也不应直接暴露到公网。安装、项目白名单和 MCP 工具说明见 [`plugins/llm-wiki/README.md`](plugins/llm-wiki/README.md)。
 

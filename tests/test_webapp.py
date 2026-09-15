@@ -77,6 +77,32 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("暂无已提交页面", text)
         self.assertNotIn("innerHTML = page.body", text)
 
+    def test_health_distinguishes_local_storage_from_unconfigured_external_dependencies(self):
+        with mock.patch.dict("os.environ", {"MENTI_AUTHORIZE_URL": "", "MENTI_AUTH_CODE_URL": "", "MENTI_CLIENT_ID": "", "MENTI_CLIENT_SECRET": "", "LLM_WIKI_API_KEY": "", "DEEPSEEK_API_KEY": ""}, clear=False):
+            status, _, body = self.app.get("/healthz", {})
+            result = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(result["checks"]["storage"], "ok")
+        self.assertEqual(result["status"], "degraded")
+
+    def test_login_callback_requires_the_browser_state_cookie(self):
+        class Provider:
+            def exchange_code(self, code):
+                return {"subject": "member-login", "enabled": True}
+
+        self.auth.provider = Provider()
+        with mock.patch.dict("os.environ", {"MENTI_AUTHORIZE_URL": "https://menti.example/authorize", "MENTI_CLIENT_ID": "client", "MENTI_REDIRECT_URI": "https://lw.app.mentti.work/auth/callback"}, clear=False):
+            status, headers, _ = self.app.get("/auth/login", {})
+        self.assertEqual(status, 302)
+        state_cookie = headers["Set-Cookie"].split(";", 1)[0]
+        state = state_cookie.split("=", 1)[1]
+        with self.assertRaises(AuthError):
+            self.app.get(f"/auth/callback?code=login-code&state={state}", {})
+        self.auth_store.register_authorization_code("login-code")
+        status, headers, _ = self.app.get(f"/auth/callback?code=login-code&state={state}", {"Cookie": state_cookie})
+        self.assertEqual(status, 302)
+        self.assertIn("lw_session=", headers["Set-Cookie"])
+
     def test_signed_disable_webhook_invalidates_existing_credentials(self):
         login = self.auth_store.issue_session("member-1", 3600)[0]
         token = self.auth.issue_mcp_token(login)["access_token"]

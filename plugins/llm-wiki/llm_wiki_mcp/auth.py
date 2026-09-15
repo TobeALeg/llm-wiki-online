@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -305,6 +306,33 @@ class MentiIdentityProvider:
         }
         _required_text(identity["subject"], "subject")
         return identity
+
+    def list_members(self) -> list[dict[str, Any]]:
+        """Fetch the authoritative member list through the configured Menti app endpoint."""
+
+        endpoint = os.environ.get("MENTI_MEMBERS_URL", "").strip()
+        if not endpoint:
+            raise AuthError("MENTI_MEMBERS_URL is not configured.")
+        client_id = os.environ.get("MENTI_CLIENT_ID", "")
+        client_secret = os.environ.get("MENTI_CLIENT_SECRET", "")
+        if not client_id or not client_secret:
+            raise AuthError("Menti application credentials are not configured.")
+        credentials = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+        request = urllib.request.Request(endpoint, headers={"Authorization": f"Basic {credentials}"}, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                value = json.loads(response.read(256 * 1024).decode("utf-8"))
+        except Exception as exc:
+            raise AuthError("Menti member reconciliation failed.") from exc
+        members = value.get("members") if isinstance(value, dict) else value
+        if not isinstance(members, list):
+            raise AuthError("Menti member reconciliation response is invalid.")
+        return [{
+            "subject": item.get("subject", item.get("sub")),
+            "email": item.get("email", ""),
+            "name": item.get("name", item.get("display_name", "")),
+            "enabled": item.get("enabled", item.get("active", True)),
+        } for item in members if isinstance(item, dict)]
 
 
 class AuthService:

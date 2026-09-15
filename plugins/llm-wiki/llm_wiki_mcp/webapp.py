@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hmac
 import os
 import re
 import threading
@@ -150,7 +151,15 @@ class WikiWebApp:
         parsed = urllib.parse.urlsplit(path)
         route = parsed.path
         if route in {"/healthz", "/api/health"}:
-            result = {"status": "ok", "service": "llm-wiki", "checks": {"storage": "ok", "identity": "configured" if os.environ.get("MENTI_AUTH_CODE_URL") else "unconfigured", "model": "configured" if os.environ.get("LLM_WIKI_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") else "unconfigured"}}
+            try:
+                self.shared.store.current_version()
+                storage = "ok"
+            except Exception:
+                storage = "error"
+            identity = "configured" if all(os.environ.get(name) for name in ("MENTI_AUTHORIZE_URL", "MENTI_AUTH_CODE_URL", "MENTI_CLIENT_ID", "MENTI_CLIENT_SECRET")) else "unconfigured"
+            model = "configured" if os.environ.get("LLM_WIKI_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") else "unconfigured"
+            checks = {"storage": storage, "identity": identity, "model": model}
+            result = {"status": "ok" if all(value == "configured" or value == "ok" for value in checks.values()) else "degraded", "service": "llm-wiki", "checks": checks}
             return self.response(200, result)
         if route == "/auth/login":
             authorize = os.environ.get("MENTI_AUTHORIZE_URL", "").strip()
@@ -158,10 +167,13 @@ class WikiWebApp:
                 raise StoreError("Menti login is not configured.")
             state = self.auth.store.issue_state()
             query = urllib.parse.urlencode({"response_type": "code", "client_id": os.environ.get("MENTI_CLIENT_ID", ""), "redirect_uri": os.environ.get("MENTI_REDIRECT_URI", ""), "state": state})
-            return 302, {"Location": authorize + ("&" if "?" in authorize else "?") + query}, b""
+            return 302, {"Location": authorize + ("&" if "?" in authorize else "?") + query, "Set-Cookie": f"lw_oauth_state={state}; HttpOnly; Secure; SameSite=Lax; Path=/auth; Max-Age=300"}, b""
         if route == "/auth/callback":
             query = urllib.parse.parse_qs(parsed.query)
             state = query.get("state", [""])[0]
+            cookie_state = next((value.split("=", 1)[1] for value in headers.get("Cookie", "").split(";") if value.strip().startswith("lw_oauth_state=")), "")
+            if not cookie_state or not hmac.compare_digest(cookie_state, state):
+                raise AuthError("OAuth state is invalid.")
             self.auth.store.consume_state(state)
             login = self.auth.login_with_code(query.get("code", [""])[0])
             return 302, {"Location": "/", "Set-Cookie": f"lw_session={login['session_token']}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={self.auth.session_ttl}"}, b""
@@ -263,3 +275,32 @@ class WikiRequestHandler(BaseHTTPRequestHandler):
             self._finish(self.server.app.post(self.path.split("?", 1)[0], {key: value for key, value in self.headers.items()}, body))
         except Exception as exc:
             self._finish(self._error(exc))
+
+
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+    from .auth import AuthStore, MentiIdentityProvider
+    from .reconcile import MemberReconciler
+    from .server import database_path
+    from .shared_service import SharedWikiService
+    from .store import SharedWikiStore
+
+    parser = argparse.ArgumentParser(description="Run the authenticated LLM Wiki browser API.")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", default=8000, type=int)
+    args = parser.parse_args(argv)
+    database = database_path()
+    provider = MentiIdentityProvider()
+    auth = AuthService(AuthStore(database), provider)
+    shared = SharedWikiService(SharedWikiStore(database))
+    reconciler = None
+    if os.environ.get("MENTI_MEMBERS_URL", "").strip():
+        reconciler = MemberReconciler(auth, provider.list_members, interval_seconds=int(os.environ.get("LLM_WIKI_RECONCILE_INTERVAL_SECONDS", "900")))
+        reconciler.start()
+    server = WikiWebApp(auth, shared).server(args.host, args.port)
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+        if reconciler:
+            reconciler.stop()

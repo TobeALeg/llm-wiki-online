@@ -12,6 +12,8 @@ dependencies = ["mcp>=1.13,<2"]
 [project.scripts]
 llm-wiki-mcp = "llm_wiki_mcp.server:main"
 llm-wiki-projects = "llm_wiki_mcp.manage:main"
+llm-wiki-web = "llm_wiki_mcp.webapp:main"
+llm-wiki-ops = "llm_wiki_mcp.ops:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
