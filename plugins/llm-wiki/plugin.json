@@ -1,0 +1,36 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "llm-wiki",
+  "version": "0.2.0",
+  "description": "Maintain and query private, project-scoped LLM Wikis through a local MCP server.",
+  "author": {
+    "name": "TobeALeg"
+  },
+  "repository": "https://github.com/TobeALeg/SKILLS",
+  "license": "MIT",
+  "keywords": [
+    "wiki",
+    "project-memory",
+    "mcp",
+    "knowledge-base"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "LLM Wiki",
+        "shortDescription": "Private project memory backed by local files.",
+        "longDescription": "Capture selected conversation knowledge, consolidate project files with DeepSeek, and query a project-local LLM Wiki through MCP.",
+        "developerName": "TobeALeg",
+        "category": "Productivity",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "defaultPrompt": [
+          "Save the durable conclusions from this conversation to my project wiki.",
+          "Search my project wiki for the reasoning behind this decision."
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "llm-wiki": {
+      "command": "python",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/run_mcp.py"
+      ],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}"
+    }
+  }
+}

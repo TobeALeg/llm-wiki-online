@@ -1,0 +1,6 @@
+interface:
+  display_name: "LLM Wiki"
+  short_description: "Build project memory from code and conversations"
+  default_prompt: "Update the current project's LLM Wiki with durable context from relevant files and this conversation."
+policy:
+  allow_implicit_invocation: false

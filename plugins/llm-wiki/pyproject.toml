@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-wiki-mcp"
+version = "0.2.0"
+description = "A local MCP bridge for project-scoped LLM Wikis"
+requires-python = ">=3.10"
+dependencies = ["mcp>=1.13,<2"]
+
+[project.scripts]
+llm-wiki-mcp = "llm_wiki_mcp.server:main"
+llm-wiki-projects = "llm_wiki_mcp.manage:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["llm_wiki_mcp*"]
