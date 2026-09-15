@@ -40,6 +40,7 @@ class SharedWikiService:
     ) -> dict[str, Any]:
         """Organize against a snapshot, then commit only if its base still matches."""
 
+        material_list = list(materials)
         snapshot = self.store.list_pages()
         if base_version != snapshot["version"]:
             from .store import ConflictError
@@ -48,8 +49,8 @@ class SharedWikiService:
                 f"Wiki changed since base_version {base_version}; retry from version {snapshot['version']}.",
                 current_version=snapshot["version"],
             )
-        package = update or self.core.organize(materials, snapshot["pages"], purpose)
-        result = self.store.commit_update(actor_subject, base_version, idempotency_key, materials, package)
+        package = update or self.core.organize(material_list, snapshot["pages"], purpose)
+        result = self.store.commit_update(actor_subject, base_version, idempotency_key, material_list, package)
         result["actor_subject"] = actor_subject
         return result
 
