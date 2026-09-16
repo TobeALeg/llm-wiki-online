@@ -31,7 +31,7 @@ codex mcp login lw-company
 3. 在启动 Codex 的终端中执行：
 
 ```bash
-export LW_MCP_TOKEN='粘贴网页生成的 Key'
+read -s LW_MCP_TOKEN && export LW_MCP_TOKEN
 codex mcp add lw-company \
   --url https://lw.app.mentti.work/mcp \
   --bearer-token-env-var LW_MCP_TOKEN
