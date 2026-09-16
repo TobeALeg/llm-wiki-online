@@ -16,6 +16,9 @@ assert SPEC.loader
 SPEC.loader.exec_module(wiki)
 
 
+ONE_FILE_BATCH_CHARS = 40
+
+
 def args(episode=None, episode_file=None):
     return type("Args", (), {"episode": episode, "episode_file": episode_file})()
 
@@ -435,9 +438,7 @@ class ResumeEvidenceTests(WikiIngestTestCase):
         return model
 
     def one_file_per_batch(self):
-        """Small enough that a batch holds a single file's chunk."""
-
-        return 40
+        return ONE_FILE_BATCH_CHARS
 
     def test_evidence_from_before_the_failure_reaches_the_final_page(self):
         first = []

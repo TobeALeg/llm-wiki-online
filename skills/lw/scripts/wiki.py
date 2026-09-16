@@ -407,8 +407,7 @@ def create_run(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
         "created_at": now_iso(),
         "files": files,
         "units": units,
-        # Pages a finished batch produced, kept so a retry contributes them to the final commit.
-        "pages": [],
+        "drafted_pages": [],
     }
     save_run(root, run)
     return run
@@ -733,7 +732,7 @@ def do_update(root: Path, args: argparse.Namespace) -> None:
     episodes = pending_episodes(root, state)
     diff = diff_records(state, records)
     purpose = (wiki_path(root) / "purpose.md").read_text(encoding="utf-8")
-    drafts: list[dict[str, Any]] = list(run.get("pages", []))
+    drafts: list[dict[str, Any]] = list(run.get("drafted_pages", []))
     pages_by_slug: dict[str, Any] = {page["slug"]: page for page in current_pages(root)}
     for page in drafts:
         if isinstance(page, dict) and page.get("slug"):
@@ -753,7 +752,7 @@ def do_update(root: Path, args: argparse.Namespace) -> None:
         for unit in batch:
             unit["done"] = True
         drafts.extend(raw_pages)
-        run["pages"] = drafts
+        run["drafted_pages"] = drafts
         save_run(root, run)
         for page in raw_pages:
             if isinstance(page, dict) and page.get("slug"):
