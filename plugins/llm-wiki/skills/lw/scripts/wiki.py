@@ -15,11 +15,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import chunking  # noqa: E402
+
 WIKI_DIR = ".llm-wiki"
-STATE_VERSION = 1
+STATE_VERSION = 2
 MAX_FILE_BYTES = 128 * 1024
-MAX_FILE_EXCERPT = 24_000
-MAX_TOTAL_INPUT = 180_000
+DEFAULT_MATERIAL_BUDGET = 180_000
 ALLOWED_TYPES = {"concept", "decision", "guide", "reference", "person", "client", "process", "system"}
 ALLOWED_STATUSES = {"current", "draft", "superseded", "archived"}
 EXCLUDED_DIRS = {
@@ -29,9 +32,9 @@ EXCLUDED_DIRS = {
 TEXT_EXTENSIONS = {
     ".c", ".cc", ".conf", ".cpp", ".cs", ".css", ".csv", ".go", ".graphql",
     ".h", ".hpp", ".html", ".ini", ".java", ".js", ".json", ".jsx", ".kt",
-    ".kts", ".md", ".mdx", ".php", ".properties", ".proto", ".py", ".rb",
-    ".rs", ".scss", ".sh", ".sql", ".svelte", ".swift", ".toml", ".ts",
-    ".tsx", ".txt", ".vue", ".xml", ".yaml", ".yml",
+    ".kts", ".md", ".mdx", ".php", ".properties", ".proto", ".py",
+    ".rb", ".rs", ".scss", ".sh", ".sql", ".svelte", ".swift", ".toml",
+    ".ts", ".tsx", ".txt", ".vue", ".xml", ".yaml", ".yml",
 }
 TEXT_NAMES = {"dockerfile", "makefile", "license", "readme"}
 SECRET_PATTERNS = (
@@ -65,6 +68,10 @@ def wiki_path(root: Path) -> Path:
     return root / WIKI_DIR
 
 
+def runs_dir(root: Path) -> Path:
+    return wiki_path(root) / "runs"
+
+
 def default_state() -> dict[str, Any]:
     return {
         "version": STATE_VERSION,
@@ -96,11 +103,38 @@ def require_wiki(root: Path) -> Path:
     return location
 
 
+def migrate_state(state: dict[str, Any]) -> dict[str, Any]:
+    files = {}
+    for path, record in state.get("files", {}).items():
+        files[path] = {
+            "sha256": record.get("sha256", ""),
+            "bytes": record.get("bytes", 0),
+            "status": "unverified",
+            "reason": "recorded by a version that tracked no per-chunk coverage; re-ingested once to verify the whole file",
+            "chunks_total": 0,
+            "chunks_done": [],
+        }
+    return {
+        "version": STATE_VERSION,
+        "files": files,
+        "processed_episodes": list(state.get("processed_episodes", [])),
+        "pages": state.get("pages", {}),
+        "last_update": state.get("last_update"),
+        "provider": state.get("provider", {"base_url": None, "model": None}),
+    }
+
+
 def load_state(root: Path) -> dict[str, Any]:
-    state = read_json(require_wiki(root) / "state.json")
-    if state.get("version") != STATE_VERSION:
-        raise WikiError(f"Unsupported state version: {state.get('version')}")
-    return state
+    location = require_wiki(root)
+    state = read_json(location / "state.json")
+    version = state.get("version")
+    if version == STATE_VERSION:
+        return state
+    if version == 1:
+        state = migrate_state(state)
+        write_json(location / "state.json", state)
+        return state
+    raise WikiError(f"Unsupported state version: {version}")
 
 
 def init_wiki(root: Path) -> None:
@@ -152,36 +186,52 @@ def eligible_files(root: Path) -> Iterable[Path]:
             suffix = path.suffix.lower()
             if suffix not in TEXT_EXTENSIONS and filename.lower() not in TEXT_NAMES:
                 continue
-            try:
-                if path.stat().st_size > MAX_FILE_BYTES:
-                    continue
-            except OSError:
-                continue
             yield path
 
 
-def file_record(path: Path, root: Path) -> dict[str, Any] | None:
+def file_record(path: Path, root: Path) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        return None, f"unreadable: {exc}"
+    if size > MAX_FILE_BYTES:
+        return None, f"oversize: {size} bytes exceeds the {MAX_FILE_BYTES} byte scan limit"
     try:
         data = path.read_bytes()
+    except OSError as exc:
+        return None, f"unreadable: {exc}"
+    try:
         text = data.decode("utf-8")
-    except (OSError, UnicodeDecodeError):
-        return None
-    digest = hashlib.sha256(data).hexdigest()
+    except UnicodeDecodeError as exc:
+        return None, f"not valid utf-8: {exc}"
     return {
         "path": path.relative_to(root).as_posix(),
-        "sha256": digest,
+        "sha256": hashlib.sha256(data).hexdigest(),
         "bytes": len(data),
         "text": text,
-    }
+    }, None
+
+
+def scan_tree(root: Path) -> tuple[dict[str, dict[str, Any]], list[dict[str, str]]]:
+    records: dict[str, dict[str, Any]] = {}
+    skips: list[dict[str, str]] = []
+    for path in eligible_files(root):
+        record, reason = file_record(path, root)
+        if record is None:
+            skips.append({"path": path.relative_to(root).as_posix(), "reason": reason or "unreadable"})
+        else:
+            records[record["path"]] = record
+    return records, skips
 
 
 def scan_records(root: Path) -> dict[str, dict[str, Any]]:
-    records: dict[str, dict[str, Any]] = {}
-    for path in eligible_files(root):
-        record = file_record(path, root)
-        if record:
-            records[record["path"]] = record
+    records, _ = scan_tree(root)
     return records
+
+
+def scan_skips(root: Path) -> list[dict[str, str]]:
+    _, skips = scan_tree(root)
+    return skips
 
 
 def diff_records(state: dict[str, Any], records: dict[str, dict[str, Any]]) -> dict[str, list[str]]:
@@ -271,28 +321,172 @@ def current_pages(root: Path) -> list[dict[str, str]]:
     return result
 
 
-def source_bundle(root: Path, state: dict[str, Any], records: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], set[str]]:
-    diff = diff_records(state, records)
-    changed_paths = diff["added"] + diff["changed"]
-    total = 0
+def file_source_id(path: str, sha256: str) -> str:
+    return f"file:{path}@sha256:{sha256[:12]}"
+
+
+def material_budget() -> int:
+    """Character budget for the chunk material in one model request."""
+
+    return DEFAULT_MATERIAL_BUDGET
+
+
+def plan_ingest(state: dict[str, Any], records: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    previous = state.get("files", {})
     files = []
-    source_ids: set[str] = set()
-    for path in changed_paths:
+    chunks_total = 0
+    for path in sorted(records):
         record = records[path]
-        excerpt = record["text"][:MAX_FILE_EXCERPT]
-        if total + len(excerpt) > MAX_TOTAL_INPUT:
-            remaining = MAX_TOTAL_INPUT - total
-            if remaining <= 0:
-                break
-            excerpt = excerpt[:remaining]
-        source_id = f"file:{path}@sha256:{record['sha256'][:12]}"
-        source_ids.add(source_id)
-        files.append({"source_id": source_id, "content": excerpt})
-        total += len(excerpt)
-    episodes = pending_episodes(root, state)
-    for episode in episodes:
-        source_ids.add(f"episode:{episode['id']}")
-    return {"diff": diff, "files": files, "episodes": episodes}, source_ids
+        tracked = previous.get(path, {})
+        if tracked.get("sha256") == record["sha256"] and tracked.get("status") == "complete":
+            continue
+        revision_id = f"sha256:{record['sha256']}"
+        source_id = file_source_id(path, record["sha256"])
+        parsed = chunking.chunk_text(record["text"])
+        chunks = [
+            {
+                "chunk_id": chunk.chunk_id,
+                "index": chunk.index,
+                "start": chunk.start,
+                "end": chunk.end,
+                "heading_path": list(chunk.heading_path),
+                "text": chunk.text,
+                "source_id": source_id,
+                "path": path,
+            }
+            for chunk in parsed
+        ]
+        files.append({
+            "path": path,
+            "source_id": source_id,
+            "revision_id": revision_id,
+            "parse_id": chunking.parse_id(revision_id, parsed),
+            "sha256": record["sha256"],
+            "chunks": chunks,
+        })
+        chunks_total += len(chunks)
+    return {"files": files, "chunks_total": chunks_total}
+
+
+def plan_run_id(plan: dict[str, Any]) -> str:
+    digest = hashlib.sha256()
+    for entry in plan["files"]:
+        for field in (entry["path"], entry["revision_id"], entry["parse_id"]):
+            digest.update(field.encode("utf-8"))
+            digest.update(b"\x00")
+    return "run-" + digest.hexdigest()[:16]
+
+
+def create_run(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
+    files: dict[str, dict[str, Any]] = {}
+    units: list[dict[str, Any]] = []
+    for ordinal, entry in enumerate(plan["files"], start=1):
+        files[entry["path"]] = {
+            "source_id": entry["source_id"],
+            "revision_id": entry["revision_id"],
+            "parse_id": entry["parse_id"],
+            "sha256": entry["sha256"],
+            "chunks_total": len(entry["chunks"]),
+        }
+        for chunk in entry["chunks"]:
+            units.append({
+                "chunk_id": f"chunk-{ordinal:03d}-{chunk['index']:03d}",
+                "index": chunk["index"],
+                "source_id": entry["source_id"],
+                "path": entry["path"],
+                "start": chunk["start"],
+                "end": chunk["end"],
+                "heading_path": list(chunk["heading_path"]),
+                "revision_id": entry["revision_id"],
+                "sha256": entry["sha256"],
+                "chunk_text": chunk["text"],
+                "done": False,
+            })
+    run = {
+        "run_id": plan_run_id(plan),
+        "created_at": now_iso(),
+        "files": files,
+        "units": units,
+        # Pages a finished batch produced, kept so a retry contributes them to the final commit.
+        "pages": [],
+    }
+    save_run(root, run)
+    return run
+
+
+def save_run(root: Path, run: dict[str, Any]) -> None:
+    location = runs_dir(root)
+    location.mkdir(parents=True, exist_ok=True)
+    write_json(location / f"{run['run_id']}.json", run)
+
+
+def load_run(root: Path) -> dict[str, Any] | None:
+    location = runs_dir(root)
+    if not location.is_dir():
+        return None
+    manifests = sorted(location.glob("*.json"))
+    if not manifests:
+        return None
+    return read_json(manifests[0])
+
+
+def commit_run(root: Path, run: dict[str, Any]) -> None:
+    (runs_dir(root) / f"{run['run_id']}.json").unlink(missing_ok=True)
+
+
+def prepare_batches(run: dict[str, Any], budget: int) -> list[list[dict[str, Any]]]:
+    batches: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    used = 0
+    for unit in run["units"]:
+        if unit.get("done"):
+            continue
+        size = len(unit["chunk_text"])
+        if current and used + size > budget:
+            batches.append(current)
+            current, used = [], 0
+        current.append(unit)
+        used += size
+    if current:
+        batches.append(current)
+    return batches
+
+
+def run_report(run: dict[str, Any]) -> dict[str, Any]:
+    done: dict[str, int] = {}
+    for unit in run["units"]:
+        if unit.get("done"):
+            done[unit["path"]] = done.get(unit["path"], 0) + 1
+    files = {}
+    for path, entry in run["files"].items():
+        total = entry["chunks_total"]
+        finished = done.get(path, 0)
+        if total == 0 or finished >= total:
+            status = "complete"
+        elif finished == 0:
+            status = "deferred"
+        else:
+            status = "partial"
+        files[path] = {"chunks_total": total, "chunks_done": finished, "status": status}
+    return {"run_id": run["run_id"], "files": files}
+
+
+def unit_text(root: Path, unit: dict[str, Any]) -> str:
+    path = root / unit["path"]
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise WikiError(f"Cannot read {unit['path']}: {exc}") from exc
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise WikiError(f"{unit['path']} is no longer valid utf-8: {exc}") from exc
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != unit["sha256"]:
+        raise WikiError(
+            f"{unit['path']} changed while the run was open: {digest} is not {unit['sha256']}"
+        )
+    return text[unit["start"]:unit["end"]]
 
 
 def call_model(payload_data: dict[str, Any], purpose: str, pages: list[dict[str, str]]) -> dict[str, Any]:
@@ -407,7 +601,7 @@ def render_page(page: dict[str, Any]) -> str:
 
 
 def known_sources(root: Path, records: dict[str, dict[str, Any]], episodes: list[dict[str, Any]]) -> set[str]:
-    result = {f"file:{path}@sha256:{record['sha256'][:12]}" for path, record in records.items()}
+    result = {file_source_id(path, record["sha256"]) for path, record in records.items()}
     result.update(f"episode:{episode['id']}" for episode in episodes)
     for path in (wiki_path(root) / "episodes").glob("*.json"):
         try:
@@ -433,35 +627,95 @@ def rebuild_index(root: Path, state: dict[str, Any]) -> None:
     (wiki_path(root) / "index.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def apply_update(root: Path, state: dict[str, Any], records: dict[str, dict[str, Any]], bundle: dict[str, Any], update: dict[str, Any]) -> list[str]:
-    raw_pages = update.get("pages", [])
-    if not isinstance(raw_pages, list):
-        raise WikiError("Model output field 'pages' must be a list.")
+def batch_payload(root: Path, run: dict[str, Any], batch: list[dict[str, Any]], diff: dict[str, Any], episodes: list[dict[str, Any]]) -> dict[str, Any]:
+    ordinals = {unit["chunk_id"]: number for number, unit in enumerate(run["units"], start=1)}
+    chunks = []
+    for unit in batch:
+        # Refuse to extend a run whose source moved under it, then send the chunk as it was parsed.
+        unit_text(root, unit)
+        chunks.append({
+            "handle": f"c{ordinals[unit['chunk_id']]:03d}",
+            "chunk_id": unit["chunk_id"],
+            "index": unit["index"],
+            "start": unit["start"],
+            "end": unit["end"],
+            "heading_path": unit["heading_path"],
+            "text": unit["chunk_text"],
+            "source_id": unit["source_id"],
+            "path": unit["path"],
+        })
+    files = []
+    seen: set[str] = set()
+    for unit in batch:
+        if unit["path"] in seen:
+            continue
+        seen.add(unit["path"])
+        entry = run["files"][unit["path"]]
+        files.append({
+            "path": unit["path"],
+            "source_id": entry["source_id"],
+            "revision_id": entry["revision_id"],
+            "parse_id": entry["parse_id"],
+            "chunks_total": entry["chunks_total"],
+        })
+    return {"diff": diff, "files": files, "chunks": chunks, "episodes": episodes}
+
+
+def tracked_files(root: Path, state: dict[str, Any], run: dict[str, Any], records: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    tracked = {
+        path: dict(record)
+        for path, record in state.get("files", {}).items()
+        if path in records
+    }
+    for path, entry in run["files"].items():
+        units = [unit for unit in run["units"] if unit["path"] == path]
+        done = sorted(unit["chunk_id"] for unit in units if unit.get("done"))
+        if path in records:
+            size = records[path]["bytes"]
+        else:
+            try:
+                size = (root / path).stat().st_size
+            except OSError:
+                size = 0
+        complete = len(done) == len(units)
+        tracked[path] = {
+            "sha256": entry["sha256"],
+            "bytes": size,
+            "status": "complete" if complete else ("deferred" if not done else "partial"),
+            "reason": "" if complete else f"{len(done)} of {len(units)} chunks processed",
+            "chunks_total": len(units),
+            "chunks_done": done,
+        }
+    return tracked
+
+
+def commit_update(root: Path, state: dict[str, Any], run: dict[str, Any], records: dict[str, dict[str, Any]], pages: list[Any], episodes: list[dict[str, Any]], notes: list[str], provider: dict[str, Any]) -> list[str]:
     all_episodes = [read_json(path) for path in (wiki_path(root) / "episodes").glob("*.json")]
     allowed_sources = known_sources(root, records, all_episodes)
-    pages = [validate_page(page, allowed_sources) for page in raw_pages]
+    allowed_sources.update(entry["source_id"] for entry in run["files"].values())
+    allowed_sources.update(f"episode:{episode['id']}" for episode in episodes)
+    validated = [validate_page(page, allowed_sources) for page in pages]
     changed = []
-    for page in pages:
+    for page in validated:
         target = wiki_path(root) / "pages" / f"{page['slug']}.md"
         target.write_text(render_page(page), encoding="utf-8")
         state.setdefault("pages", {})[page["slug"]] = {key: page[key] for key in (
             "title", "type", "status", "tags", "summary", "sources", "updated_at"
         )}
         changed.append(page["slug"])
-    state["files"] = {
-        path: {"sha256": record["sha256"], "bytes": record["bytes"]}
-        for path, record in records.items()
-    }
+    state["files"] = tracked_files(root, state, run, records)
     processed = set(state.get("processed_episodes", []))
-    processed.update(episode["id"] for episode in bundle["episodes"])
+    processed.update(episode["id"] for episode in episodes)
     state["processed_episodes"] = sorted(processed)
     state["last_update"] = now_iso()
-    state["provider"] = update.get("_provider", {})
+    state["provider"] = provider
     write_json(wiki_path(root) / "state.json", state)
     rebuild_index(root, state)
-    note = str(update.get("note", "Wiki updated.")).strip() or "Wiki updated."
+    changed = list(dict.fromkeys(changed))
+    note = " ".join(notes).strip() or "Wiki updated."
     with (wiki_path(root) / "log.md").open("a", encoding="utf-8") as handle:
         handle.write(f"\n## {state['last_update']}\n\n{note}\n\nPages: {', '.join(changed) or 'none'}\n")
+    commit_run(root, run)
     return changed
 
 
@@ -469,14 +723,47 @@ def do_update(root: Path, args: argparse.Namespace) -> None:
     ingest_episode(root, args.episode, args.episode_file)
     state = load_state(root)
     records = scan_records(root)
-    bundle, _ = source_bundle(root, state, records)
-    has_changes = any(bundle["diff"].values()) or bool(bundle["episodes"])
-    if not has_changes:
-        print("Wiki is already current.")
-        return
+    run = load_run(root)
+    if run is None:
+        plan = plan_ingest(state, records)
+        if not plan["files"] and not pending_episodes(root, state):
+            print("Wiki is already current.")
+            return
+        run = create_run(root, plan)
+    episodes = pending_episodes(root, state)
+    diff = diff_records(state, records)
     purpose = (wiki_path(root) / "purpose.md").read_text(encoding="utf-8")
-    update = call_model(bundle, purpose, current_pages(root))
-    changed = apply_update(root, state, records, bundle, update)
+    drafts: list[dict[str, Any]] = list(run.get("pages", []))
+    pages_by_slug: dict[str, Any] = {page["slug"]: page for page in current_pages(root)}
+    for page in drafts:
+        if isinstance(page, dict) and page.get("slug"):
+            pages_by_slug[str(page["slug"])] = page
+    notes: list[str] = []
+    provider: dict[str, Any] = {}
+    batches = prepare_batches(run, material_budget())
+    if not batches and episodes:
+        batches = [[]]
+    for batch in batches:
+        update = call_model(batch_payload(root, run, batch, diff, episodes), purpose, list(pages_by_slug.values()))
+        if not isinstance(update, dict):
+            raise WikiError("The model returned a non-object update.")
+        raw_pages = update.get("pages", [])
+        if not isinstance(raw_pages, list):
+            raise WikiError("Model output field 'pages' must be a list.")
+        for unit in batch:
+            unit["done"] = True
+        drafts.extend(raw_pages)
+        run["pages"] = drafts
+        save_run(root, run)
+        for page in raw_pages:
+            if isinstance(page, dict) and page.get("slug"):
+                pages_by_slug[str(page["slug"])] = page
+        note = str(update.get("note", "")).strip()
+        if note:
+            notes.append(note)
+        if update.get("_provider"):
+            provider = update["_provider"]
+    changed = commit_update(root, state, run, records, drafts, episodes, notes, provider)
     print(f"Updated {len(changed)} page(s): {', '.join(changed) or 'none'}")
 
 
@@ -556,10 +843,16 @@ def main(argv: list[str] | None = None) -> int:
             do_update(root, args)
         elif args.command in {"scan", "status"}:
             state = load_state(root)
-            records = scan_records(root)
-            diff = diff_records(state, records)
-            print_scan(diff)
+            records, skips = scan_tree(root)
+            print_scan(diff_records(state, records))
             if args.command == "status":
+                run = load_run(root)
+                if run:
+                    report = run_report(run)
+                    for path, entry in sorted(report["files"].items()):
+                        print(f"run {entry['status']}: {path} ({entry['chunks_done']}/{entry['chunks_total']} chunks)")
+                for skip in skips:
+                    print(f"skipped {skip['path']}: {skip['reason']}")
                 print(f"pending episodes: {len(pending_episodes(root, state))}")
                 print(f"wiki pages: {len(state.get('pages', {}))}")
                 print(f"last update: {state.get('last_update') or 'never'}")
