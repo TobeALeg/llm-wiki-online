@@ -42,7 +42,8 @@ Key 与个人 mentti 身份绑定，可在生成页面撤销；成员停用后�
 
 ## 工具
 
-- `company_wiki_status`、`company_wiki_search`、`company_wiki_page`
+- `company_wiki_projects`、`company_wiki_create_project`：查看和创建 Project。
+- `company_wiki_status`、`company_wiki_search`、`company_wiki_page`：按 `project_id` 读取公司 Wiki。
 - `company_wiki_versions`、`company_wiki_restore`
 - `company_wiki_submit`
 - `local_wiki_organize`
@@ -51,6 +52,10 @@ Key 与个人 mentti 身份绑定，可在生成页面撤销；成员停用后�
 公司写入必须显式调用 `company_wiki_submit`。`local_wiki_organize` 不在本服务持久化材料，
 但材料仍会发送给配置的模型提供商。详细参数和错误语义见登录后的
 `https://lw.app.mentti.work/readme.md`。
+
+公司 Wiki 默认包含 `company` Project。先调用 `company_wiki_projects` 获取 Project ID，
+再将同一个 `project_id` 传给状态、搜索、页面、提交和恢复工具；不传时兼容旧客户端并使用
+`company`。
 
 ## OAuth 发现
 

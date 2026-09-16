@@ -40,7 +40,7 @@ class RemoteMcpTests(unittest.TestCase):
         server = create_remote_mcp(self.auth, lambda subject: {"subject": subject, "ok": True})
         tool = server._tool_manager._tools["company_wiki_status"]
         self.assertNotIn("subject", tool.parameters["properties"])
-        self.assertEqual(tool.parameters["properties"], {})
+        self.assertEqual(tool.parameters["properties"]["project_id"]["default"], "company")
         self.assertEqual(server.settings.streamable_http_path, "/mcp")
         self.assertEqual(str(server.settings.auth.resource_server_url).rstrip("/"), "https://lw.app.mentti.work/mcp")
         self.assertEqual(server.settings.auth.required_scopes, ["wiki:read", "wiki:write"])
@@ -49,7 +49,7 @@ class RemoteMcpTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {"LLM_WIKI_DATABASE": str(Path(self.temporary.name) / "company.sqlite3")}, clear=False):
             server = create_company_mcp()
         names = set(server._tool_manager._tools)
-        self.assertTrue({"company_wiki_status", "company_wiki_search", "company_wiki_page", "company_wiki_submit", "company_wiki_versions", "company_wiki_restore", "local_wiki_organize", "company_wiki_revoke_credential"} <= names)
+        self.assertTrue({"company_wiki_projects", "company_wiki_create_project", "company_wiki_status", "company_wiki_search", "company_wiki_page", "company_wiki_submit", "company_wiki_versions", "company_wiki_restore", "local_wiki_organize", "company_wiki_revoke_credential"} <= names)
 
     def test_public_hostname_is_allowed_behind_the_reverse_proxy(self):
         from llm_wiki_mcp.remote_mcp import _allowed_hosts

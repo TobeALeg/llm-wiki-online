@@ -40,17 +40,21 @@ Key 与个人 mentti 身份绑定，可以在生成页面撤销；成员被停�
 
 | 工具 | 用途 |
 | --- | --- |
-| `company_wiki_status` | 读取当前共享版本与页面数量 |
-| `company_wiki_search` | 搜索已提交页面 |
-| `company_wiki_page` | 读取页面正文、来源与状态 |
-| `company_wiki_versions` | 查看页面历史 |
-| `company_wiki_submit` | 明确提交选定材料；需要 `base_version` 和 `idempotency_key` |
-| `company_wiki_restore` | 将历史版本恢复为一个新的已提交版本 |
+| `company_wiki_projects` | 查看可用 Project |
+| `company_wiki_create_project` | 创建 Project |
+| `company_wiki_status` | 按 `project_id` 读取版本与页面数量 |
+| `company_wiki_search` | 按 `project_id` 搜索已提交页面 |
+| `company_wiki_page` | 按 `project_id` 读取页面正文、来源与状态 |
+| `company_wiki_versions` | 按 `project_id` 查看页面历史 |
+| `company_wiki_submit` | 按 `project_id` 提交选定材料；需要 `base_version` 和 `idempotency_key` |
+| `company_wiki_restore` | 按 `project_id` 将历史版本恢复为新的已提交版本 |
 | `local_wiki_organize` | 整理选定材料但不在本服务持久化 |
 | `company_wiki_revoke_credential` | 撤销当前调用使用的凭证 |
 
 `local_wiki_organize` 的“不持久化”不等于“不出网”：材料仍会发送给配置的模型提供商。
 公司写入必须显式调用 `company_wiki_submit`，本地材料不会自动进入共享 Wiki。
+默认 Project ID 是 `company`；建议先调用 `company_wiki_projects`，再将返回的 Project ID
+传给其他公司 Wiki 工具。不同 Project 的页面、来源、版本和审计记录彼此隔离。
 
 工具执行失败通过 MCP `result.isError` 返回；身份失败使用 HTTP 401。写入冲突时先重新读取
 `company_wiki_status`，基于新版本整理后再提交，不要盲目重放旧 `base_version`。

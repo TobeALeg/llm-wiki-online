@@ -71,6 +71,29 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(self.store.current_version(), 1)
 
+    def test_projects_can_be_listed_created_and_selected(self):
+        status, result = self.request("GET", "/api/wiki/projects")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["projects"][0]["id"], "company")
+
+        status, result = self.request("POST", "/api/wiki/projects", {"id": "jetbao", "name": "JetBao"})
+        self.assertEqual(status, 201)
+        self.assertEqual(result["id"], "jetbao")
+
+        status, result = self.request("GET", "/api/wiki/status?project_id=jetbao")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["project_id"], "jetbao")
+        self.assertEqual(result["page_count"], 0)
+
+    def test_project_query_does_not_leak_pages_between_projects(self):
+        self.store.create_project("jetbao", "JetBao", "member-1")
+        self.store.commit_update("member-1", 0, "company-page", [{"source_id": "company:guide", "content": "Company"}], {
+            "schema_version": 1, "pages": [{"slug": "guide", "title": "Company guide", "type": "guide", "status": "current", "tags": [], "summary": "Company", "body": "Company", "sources": ["company:guide"]}], "source_ids": ["company:guide"]
+        })
+        status, result = self.request("GET", "/api/wiki/pages?project_id=jetbao")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["pages"], [])
+
     def test_reader_html_escapes_markdown_and_has_real_states(self):
         status, html = self.request("GET", "/")
         self.assertEqual(status, 200)

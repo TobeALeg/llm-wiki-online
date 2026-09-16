@@ -45,6 +45,8 @@ def create_company_mcp() -> FastMCP:
         auth,
         shared.status,
         issuer_url=os.environ.get("LLM_WIKI_PUBLIC_URL", "https://lw.app.mentti.work"),
+        read_projects=shared.projects,
+        create_project=shared.create_project,
         read_search=shared.search,
         read_page=shared.page,
         read_versions=shared.versions,

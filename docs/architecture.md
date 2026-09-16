@@ -13,7 +13,7 @@ Browser API ─────────────┘
                                   │
                           SharedWikiStore (SQLite)
                                   │
-                    pages / sources / versions / audit / idempotency
+                  projects / pages / sources / versions / audit / idempotency
 ```
 
 `WikiCore` is side-effect free. It accepts selected material, existing Wiki
@@ -23,7 +23,9 @@ server path or a command.
 
 `AuthService` owns authorization-code redemption, sessions, MCP credentials,
 member status and ordered webhook/reconciliation updates. `SharedWikiStore`
-owns the one company Wiki and commits its durable records atomically.
+owns the company Wiki's Project catalog and commits each Project's durable
+records atomically. Projects are content scopes, not member groups; every
+enabled member can currently access every Project.
 
 `OAuthService` is the MCP authorization-server seam. It owns protected-resource
 and authorization-server metadata, dynamic client registration, authorization
@@ -49,6 +51,8 @@ rules are not inferred by lw and remain an explicit operational concern.
 ```text
 mentti identity → OAuthService/AuthService → MCP/browser request
                                   ↓
+                         selected Project
+                                  ↓
                     snapshot + model organization
                                   ↓
                  version/base check + one SQLite transaction
@@ -56,9 +60,11 @@ mentti identity → OAuthService/AuthService → MCP/browser request
               page + source + version + audit + idempotency record
 ```
 
-Both MCP and browser reads query the same committed snapshot version. Only the
-authenticated MCP write tools commit company content; the browser API is
-read-only. Clients can submit content and source identifiers, but never a
+Each Project has its own snapshot version, page slug namespace, source namespace,
+history, audit log and idempotency keys. Both MCP and browser reads query the
+same committed Project snapshot version. Only the authenticated MCP write tools
+commit company content; the browser API can create a Project and otherwise
+reads content. Clients can submit content and source identifiers, but never a
 server filesystem path.
 
 ## status flow

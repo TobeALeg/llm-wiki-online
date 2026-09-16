@@ -43,7 +43,8 @@ Key 与个人 mentti 身份绑定，可以在 `/connect` 撤销；成员被停�
 
 ## 能力与数据边界
 
-- `company_wiki_status`、`company_wiki_search`、`company_wiki_page`：读取公司 Wiki。
+- `company_wiki_projects`、`company_wiki_create_project`：查看和创建 Project。
+- `company_wiki_status`、`company_wiki_search`、`company_wiki_page`：按 `project_id` 读取公司 Wiki。
 - `company_wiki_versions`、`company_wiki_restore`：查看和恢复版本。
 - `company_wiki_submit`：明确提交选定材料到公司 Wiki。
 - `local_wiki_organize`：整理调用方明确提供的材料但不在本服务持久化；材料仍会发送给

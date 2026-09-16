@@ -1,4 +1,4 @@
-"""Authenticated Streamable HTTP MCP surface for the shared Wiki."""
+"""Authenticated Streamable HTTP MCP surface for the project-scoped Wiki."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl
 
 from .auth import AuthService
+from .store import DEFAULT_PROJECT_ID
 
 
 def _allowed_hosts(issuer_url: str) -> list[str]:
@@ -72,9 +73,11 @@ def create_remote_mcp(
     read_status: Callable[[str], dict[str, Any]],
     *,
     issuer_url: str = "https://lw.app.mentti.work",
-    read_search: Callable[[str, str, int], dict[str, Any]] | None = None,
-    read_page: Callable[[str, str], dict[str, Any]] | None = None,
-    read_versions: Callable[[str, str], dict[str, Any]] | None = None,
+    read_projects: Callable[[str], dict[str, Any]] | None = None,
+    create_project: Callable[[str, str, str], dict[str, Any]] | None = None,
+    read_search: Callable[[str, str, int, str], dict[str, Any]] | None = None,
+    read_page: Callable[[str, str, str], dict[str, Any]] | None = None,
+    read_versions: Callable[[str, str, str], dict[str, Any]] | None = None,
     submit_update: Callable[..., dict[str, Any]] | None = None,
     restore_page: Callable[..., dict[str, Any]] | None = None,
     organize_local: Callable[..., dict[str, Any]] | None = None,
@@ -110,8 +113,26 @@ def create_remote_mcp(
         title="Read shared Wiki status",
         description="Read the committed shared Wiki status for the authenticated member.",
     )
-    def company_wiki_status(ctx: Context) -> dict[str, Any]:
-        return read_status(context_subject())
+    def company_wiki_status(project_id: str = DEFAULT_PROJECT_ID, ctx: Context = None) -> dict[str, Any]:
+        return read_status(context_subject(), project_id)
+
+    if read_projects:
+        @server.tool(
+            name="company_wiki_projects",
+            title="List Wiki projects",
+            description="List the projects available in the company Wiki.",
+        )
+        def company_wiki_projects(ctx: Context = None) -> dict[str, Any]:
+            return read_projects(context_subject())
+
+    if create_project:
+        @server.tool(
+            name="company_wiki_create_project",
+            title="Create a Wiki project",
+            description="Create a new project in the company Wiki.",
+        )
+        def company_wiki_create_project(project_id: str, name: str, ctx: Context = None) -> dict[str, Any]:
+            return create_project(context_subject(), project_id, name)
 
     if read_search:
         @server.tool(
@@ -119,8 +140,8 @@ def create_remote_mcp(
             title="Search shared Wiki",
             description="Search committed shared Wiki pages for the authenticated member.",
         )
-        def company_wiki_search(query: str, limit: int = 20, ctx: Context = None) -> dict[str, Any]:
-            return read_search(context_subject(), query, limit)
+        def company_wiki_search(query: str, limit: int = 20, project_id: str = DEFAULT_PROJECT_ID, ctx: Context = None) -> dict[str, Any]:
+            return read_search(context_subject(), query, limit, project_id)
 
     if read_page:
         @server.tool(
@@ -128,8 +149,8 @@ def create_remote_mcp(
             title="Read shared Wiki page",
             description="Read one committed shared Wiki page by slug.",
         )
-        def company_wiki_page(slug: str, ctx: Context = None) -> dict[str, Any]:
-            return read_page(context_subject(), slug)
+        def company_wiki_page(slug: str, project_id: str = DEFAULT_PROJECT_ID, ctx: Context = None) -> dict[str, Any]:
+            return read_page(context_subject(), slug, project_id)
 
     if read_versions:
         @server.tool(
@@ -137,8 +158,8 @@ def create_remote_mcp(
             title="List shared Wiki history",
             description="List immutable versions of one shared Wiki page.",
         )
-        def company_wiki_versions(slug: str, ctx: Context = None) -> dict[str, Any]:
-            return read_versions(context_subject(), slug)
+        def company_wiki_versions(slug: str, project_id: str = DEFAULT_PROJECT_ID, ctx: Context = None) -> dict[str, Any]:
+            return read_versions(context_subject(), slug, project_id)
 
     if submit_update:
         @server.tool(
@@ -146,8 +167,8 @@ def create_remote_mcp(
             title="Submit shared Wiki update",
             description="Organize selected materials and atomically submit them to the shared Wiki.",
         )
-        def company_wiki_submit(base_version: int, idempotency_key: str, materials: list[dict[str, Any]], purpose: str, ctx: Context = None) -> dict[str, Any]:
-            return submit_update(context_subject(), base_version, idempotency_key, materials, purpose)
+        def company_wiki_submit(base_version: int, idempotency_key: str, materials: list[dict[str, Any]], purpose: str, project_id: str = DEFAULT_PROJECT_ID, ctx: Context = None) -> dict[str, Any]:
+            return submit_update(context_subject(), base_version, idempotency_key, materials, purpose, project_id=project_id)
 
     if restore_page:
         @server.tool(
@@ -155,8 +176,8 @@ def create_remote_mcp(
             title="Restore shared Wiki page",
             description="Restore a historical page version as a new committed version.",
         )
-        def company_wiki_restore(slug: str, version_id: int, base_version: int, idempotency_key: str, ctx: Context = None) -> dict[str, Any]:
-            return restore_page(context_subject(), slug, version_id, base_version, idempotency_key)
+        def company_wiki_restore(slug: str, version_id: int, base_version: int, idempotency_key: str, project_id: str = DEFAULT_PROJECT_ID, ctx: Context = None) -> dict[str, Any]:
+            return restore_page(context_subject(), slug, version_id, base_version, idempotency_key, project_id=project_id)
 
     if organize_local:
         @server.tool(

@@ -21,7 +21,7 @@ from .oauth import OAuthError, OAuthService
 from .remote_readme import readme_bytes
 from .remote_service import RemoteWikiService
 from .shared_service import SharedWikiService
-from .store import ConflictError, PageNotFoundError, StoreError
+from .store import DEFAULT_PROJECT_ID, ConflictError, PageNotFoundError, StoreError
 
 
 class NotFoundError(RuntimeError):
@@ -74,12 +74,13 @@ READER_HTML = r"""<!doctype html>
     :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #f6f5f1; color: #20221f; }
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; }
-    header { display: flex; gap: 24px; align-items: center; padding: 22px max(24px, calc((100vw - 1180px) / 2)); background: #1f332b; color: #f9f7ef; }
+    header { display: flex; gap: 14px; align-items: center; padding: 22px max(24px, calc((100vw - 1180px) / 2)); background: #1f332b; color: #f9f7ef; }
     header h1 { margin: 0; font: 600 24px/1.1 Georgia, serif; letter-spacing: .02em; }
     form { display: flex; flex: 1; max-width: 620px; gap: 8px; }
     .readme { color: #f9f7ef; font-size: 14px; white-space: nowrap; opacity: .85; text-decoration: none; }
     .readme:hover { opacity: 1; text-decoration: underline; }
     input { width: 100%; border: 1px solid #c9c9bd; border-radius: 999px; padding: 10px 16px; font: inherit; background: #fffef9; }
+    select { border: 1px solid #c9c9bd; border-radius: 999px; padding: 10px 14px; font: inherit; background: #fffef9; max-width: 220px; }
     button { border: 0; border-radius: 999px; padding: 10px 18px; background: #d4a94a; color: #1d241e; font-weight: 650; cursor: pointer; }
     main { display: grid; grid-template-columns: minmax(260px, 360px) 1fr; gap: 22px; max-width: 1180px; margin: 30px auto; padding: 0 24px; }
     aside, article { background: #fffef9; border: 1px solid #deddd3; border-radius: 14px; }
@@ -104,11 +105,13 @@ READER_HTML = r"""<!doctype html>
   </style>
 </head>
 <body>
-  <header><h1>LLM Wiki</h1><form id="search"><input name="q" aria-label="搜索 Wiki" autocomplete="off"><button>搜索</button></form><a class="readme" href="/connect">MCP Key</a><a class="readme" href="/readme.md">MCP 接入说明</a></header>
+  <header><h1>LLM Wiki</h1><select id="project" aria-label="选择项目"></select><button id="new-project" type="button">新建项目</button><form id="search"><input name="q" aria-label="搜索 Wiki" autocomplete="off"><button>搜索</button></form><a class="readme" href="/connect">MCP Key</a><a class="readme" href="/readme.md">MCP 接入说明</a></header>
   <main><aside><h2>页面目录</h2><div id="list" class="page-list"><div class="state">正在读取…</div></div></aside><article id="detail"><div class="state">请选择一个页面。</div></article></main>
   <script>
     const list = document.getElementById('list');
     const detail = document.getElementById('detail');
+    const projectSelect = document.getElementById('project');
+    let currentProject = 'company';
     const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
     const safeMarkdown = (value) => {
       let html = escapeHtml(value);
@@ -122,10 +125,11 @@ READER_HTML = r"""<!doctype html>
       list.innerHTML = pages.length ? pages.map(page => `<button class="page-card" data-slug="${escapeHtml(page.slug)}"><strong>${escapeHtml(page.title)}</strong><span>${escapeHtml(page.type)} · ${escapeHtml(page.status)}<br>${escapeHtml(page.summary)}</span></button>`).join('') : state('暂无已提交页面。');
       list.querySelectorAll('[data-slug]').forEach(button => button.addEventListener('click', () => openPage(button.dataset.slug)));
     };
+    const projectQuery = () => '?project_id=' + encodeURIComponent(currentProject);
     const openPage = async (slug) => {
       detail.innerHTML = state('正在读取…');
       try {
-        const response = await fetch('/api/wiki/pages/' + encodeURIComponent(slug), {credentials:'same-origin'});
+        const response = await fetch('/api/wiki/pages/' + encodeURIComponent(slug) + projectQuery(), {credentials:'same-origin'});
         if (response.status === 401) { location.href = '/auth/login'; return; }
         if (!response.ok) throw new Error('page');
         const result = await response.json();
@@ -144,8 +148,26 @@ READER_HTML = r"""<!doctype html>
         if (result.pages.length) openPage(result.pages[0].slug);
       } catch (error) { list.innerHTML = state('服务暂时不可用，请稍后重试。'); }
     };
-    document.getElementById('search').addEventListener('submit', (event) => { event.preventDefault(); const query = new FormData(event.currentTarget).get('q'); loadPages(query ? '/api/wiki/search?q=' + encodeURIComponent(query) : '/api/wiki/pages'); });
-    loadPages();
+    const loadProjects = async () => {
+      const response = await fetch('/api/wiki/projects', {credentials:'same-origin'});
+      if (!response.ok) throw new Error('projects');
+      const result = await response.json();
+      projectSelect.innerHTML = result.projects.map(project => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`).join('');
+      currentProject = result.projects.some(project => project.id === currentProject) ? currentProject : result.projects[0].id;
+      projectSelect.value = currentProject;
+    };
+    projectSelect.addEventListener('change', () => { currentProject = projectSelect.value; loadPages(); });
+    document.getElementById('new-project').addEventListener('click', async () => {
+      const name = window.prompt('项目名称');
+      if (!name || !name.trim()) return;
+      const id = window.prompt('项目 ID（小写字母、数字、短横线或下划线）');
+      if (!id || !id.trim()) return;
+      const response = await fetch('/api/wiki/projects', {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body:JSON.stringify({id:id.trim(), name:name.trim()})});
+      if (!response.ok) { window.alert('创建项目失败，请检查 ID 是否重复或格式正确。'); return; }
+      currentProject = id.trim().toLowerCase(); await loadProjects(); loadPages();
+    });
+    document.getElementById('search').addEventListener('submit', (event) => { event.preventDefault(); const query = new FormData(event.currentTarget).get('q'); loadPages(query ? '/api/wiki/search?q=' + encodeURIComponent(query) + '&project_id=' + encodeURIComponent(currentProject) : '/api/wiki/pages?project_id=' + encodeURIComponent(currentProject)); });
+    loadProjects().then(loadPages).catch(() => { list.innerHTML = state('项目读取失败，请稍后重试。'); });
   </script>
 </body>
 </html>"""
@@ -225,6 +247,7 @@ class WikiWebApp:
     def get(self, path: str, headers: dict[str, str]) -> tuple[int, dict[str, str], bytes]:
         parsed = urllib.parse.urlsplit(path)
         route = parsed.path
+        project_id = urllib.parse.parse_qs(parsed.query).get("project_id", [DEFAULT_PROJECT_ID])[0]
         if route in PROTECTED_RESOURCE_PATHS:
             return self.response(200, self.oauth.protected_resource_metadata())
         if route == "/.well-known/oauth-authorization-server":
@@ -287,23 +310,25 @@ class WikiWebApp:
                 return 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}, MCP_SETUP_HTML.encode("utf-8")
             return 200, {"Content-Type": "text/html; charset=utf-8"}, READER_HTML.encode("utf-8")
         member = self._member(headers)
+        if route == "/api/wiki/projects":
+            return self.response(200, self.shared.projects(member["subject"]))
         if route == "/api/wiki/status":
-            return self.response(200, self.shared.status(member["subject"]))
+            return self.response(200, self.shared.status(member["subject"], project_id))
         if route == "/api/wiki/pages":
-            result = self.shared.store.list_pages()
+            result = self.shared.store.list_pages(project_id)
             return self.response(200, result)
         if route == "/api/wiki/search":
-            return self.response(200, self.shared.search(member["subject"], urllib.parse.parse_qs(parsed.query).get("q", [""])[0]))
+            return self.response(200, self.shared.search(member["subject"], urllib.parse.parse_qs(parsed.query).get("q", [""])[0], project_id=project_id))
         match = re.fullmatch(r"/api/wiki/pages/([a-z0-9]+(?:-[a-z0-9]+)*)", route)
         if match:
-            result = self.shared.page(member["subject"], match.group(1))
+            result = self.shared.page(member["subject"], match.group(1), project_id)
             if result["page"] is None:
                 raise NotFoundError("Wiki page does not exist.")
             return self.response(200, result)
         match = re.fullmatch(r"/api/wiki/pages/([a-z0-9]+(?:-[a-z0-9]+)*)/versions", route)
         if match:
             try:
-                return self.response(200, self.shared.versions(member["subject"], match.group(1)))
+                return self.response(200, self.shared.versions(member["subject"], match.group(1), project_id))
             except PageNotFoundError as exc:
                 raise NotFoundError(str(exc)) from exc
         if route == "/api/me":
@@ -358,6 +383,8 @@ class WikiWebApp:
             )
             return 302, {"Location": location, "Cache-Control": "no-store"}, b""
         payload = self._json(body)
+        if path == "/api/wiki/projects":
+            return self.response(201, self.shared.create_project(member["subject"], str(payload.get("id", "")), str(payload.get("name", ""))))
         if path == "/api/mcp-token":
             return self.response(200, self.auth.issue_mcp_token(self._session_token(headers), str(payload.get("label", "Terminal"))))
         if path == "/api/mcp-credentials/revoke":
