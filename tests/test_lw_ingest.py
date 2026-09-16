@@ -187,6 +187,18 @@ class SkipReportingTests(WikiIngestTestCase):
             self.assertEqual(wiki.main(["status", "--root", str(self.root)]), 0)
         self.assertIn("huge.md", output.getvalue())
 
+    def test_update_surfaces_the_skip_reason_instead_of_silently_ignoring_it(self):
+        self.write("small.md", "A fact.\n")
+        self.write("huge.md", "z" * (wiki.MAX_FILE_BYTES + 1))
+        calls = []
+        output = StringIO()
+        with mock.patch.object(wiki, "call_model", side_effect=answering_model(calls)):
+            with redirect_stdout(output):
+                wiki.do_update(self.root, args())
+        rendered = output.getvalue()
+        self.assertIn("skipped huge.md", rendered)
+        self.assertIn(str(wiki.MAX_FILE_BYTES), rendered)
+
 
 class PlanningTests(WikiIngestTestCase):
     def test_an_unchanged_complete_source_is_not_planned_again(self):

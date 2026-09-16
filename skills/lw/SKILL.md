@@ -41,7 +41,7 @@ Do not imply that the plugin automatically reads every ChatGPT conversation. It 
 
 ## Long documents and interrupted updates
 
-`update` no longer truncates a file at an excerpt boundary: it chunks each new or changed source and sends every chunk in order, batching them so the chunk material for one request stays within the material budget. A source over the 128 KiB scan limit is still read as a whole file and so is not ingested; `status` reports it with that reason. A file is only marked processed after its pages are committed, so an update that stops part way leaves the rest to be done next time.
+`update` no longer truncates a file at an excerpt boundary: it chunks each new or changed source and sends every chunk in order, batching them so the chunk material for one request stays within the material budget. A source over the 128 KiB scan limit is still skipped as a whole file and is not ingested; `update` and `status` both print it with that reason. A file is only marked processed after its pages are committed, so an update that stops part way leaves the rest to be done next time.
 
 When `update` fails part way through, it leaves a run manifest in `.llm-wiki/runs/`. Running `update` again resumes at the first unfinished chunk and reuses what already succeeded, so leave the directory in place. If a source changes while a run is open, its unfinished chunks are dropped from that run and it is planned again from its new content; `status` reports the unfinished run and the reason any file was skipped. Upgrading an older wiki rewrites `state.json` once and leaves the previous file at `.llm-wiki/state.v1.json`.
 

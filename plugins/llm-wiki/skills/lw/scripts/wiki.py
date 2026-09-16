@@ -764,6 +764,9 @@ def do_update(root: Path, args: argparse.Namespace) -> None:
     ingest_episode(root, args.episode, args.episode_file)
     state = load_state(root)
     records = scan_records(root)
+    for skip in scan_skips(root):
+        # A file that cannot be read must not disappear from the command the user actually runs.
+        print(f"skipped {skip['path']}: {skip['reason']}")
     run = load_run(root)
     if run is None:
         plan = plan_ingest(state, records)
