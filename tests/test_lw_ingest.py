@@ -56,6 +56,32 @@ def answering_model(calls, slug="delivery-plan"):
     return model
 
 
+def accumulating_model(calls, slug="delivery-plan"):
+    """A model that folds the sources it is shown into one page, so evidence accumulates."""
+
+    def model(payload, purpose, pages):
+        calls.append(payload)
+        sources = set()
+        for entry in pages:
+            sources.update(entry.get("sources", []))
+        sources.update(unit["source_id"] for unit in payload["chunks"])
+        return {
+            "pages": [{
+                "slug": slug,
+                "title": "Delivery plan",
+                "type": "decision",
+                "status": "current",
+                "tags": ["delivery"],
+                "summary": "Delivery dates.",
+                "body": "Consolidated delivery dates.",
+                "sources": sorted(sources),
+            }],
+            "note": "recorded",
+        }
+
+    return model
+
+
 class WikiIngestTestCase(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -393,6 +419,43 @@ class FailureAndResumeTests(WikiIngestTestCase):
         self.assertEqual(state["files"]["keeper.md"]["status"], "complete")
         self.assertNotIn("mover.md", state["files"], "an abandoned source is not marked complete")
         self.assertIn("mover.md", wiki.scan_records(self.root), "it stays live for the next run")
+
+    def test_an_abandoned_source_still_lets_the_drafted_page_commit(self):
+        """The cross-process case: a draft citing the old revision must survive the retry.
+
+        The reviewer found that when the run is resumed in a NEW process, rescanning sees
+        the edited file's new hash, so a draft the crashed run already produced names a
+        source id that no longer looks known. That rejected the whole run on every retry.
+        """
+
+        self.write("a.md", long_document(paragraphs=20))
+        self.write("b.md", "Edited during the run.\n")
+        state, records = self.rebuild()
+        run = wiki.create_run(self.root, wiki.plan_ingest(state, records))
+        self.assertTrue([u for u in run["units"] if u["path"] == "b.md"])
+
+        # A batch runs and drafts a page citing b.md's original source id. b.md's own units
+        # are still unfinished when the run stops, then the source is edited on disk.
+        old_source = run["files"]["b.md"]["source_id"]
+        run["drafted_pages"] = [page("delivery-plan", old_source, marker="drafted")]
+        wiki.save_run(self.root, run)
+        self.write("b.md", "Changed content entirely.\n")
+
+        fresh_state = wiki.load_state(self.root)
+        fresh_records = wiki.scan_records(self.root)
+        remaining = [u for u in run["units"] if not u.get("done")]
+        drifted = wiki.drop_drifted_sources(self.root, run, remaining)
+        self.assertEqual(drifted, ["b.md"], "the edited source is detected once rescanned")
+        wiki.save_run(self.root, run)
+
+        committed = wiki.commit_update(
+            self.root, fresh_state, run, fresh_records, run["drafted_pages"], [], ["resumed"], {}
+        )
+
+        self.assertEqual(committed, ["delivery-plan"])
+        rendered = (self.pages_dir / "delivery-plan.md").read_text(encoding="utf-8")
+        self.assertIn(old_source, rendered, "the draft keeps the revision the model actually read")
+        self.assertIsNone(wiki.load_run(self.root), "the run converges instead of sticking")
 
     def test_two_manifests_resolve_to_the_newest_not_an_arbitrary_one(self):
         self.write("xyz.md", long_document(paragraphs=20))

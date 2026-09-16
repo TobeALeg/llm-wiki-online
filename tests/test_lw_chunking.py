@@ -213,6 +213,14 @@ class BudgetTests(ChunkAssertions):
         self.assert_invariants(text, chunks, 1_200)
         self.assert_covers_source(text, chunks)
 
+    def test_an_oversized_heading_line_is_still_capped(self):
+        """A heading longer than the cap must not become an oversized chunk."""
+
+        text = "# " + "T" * 5_000 + "\n\nbody after the heading\n"
+        chunks = chunking.chunk_text(text, target_chars=200, max_chars=300)
+        self.assert_invariants(text, chunks, 300)
+        self.assert_no_content_lost(text, chunks)
+
     def test_output_is_deterministic(self):
         text = self.long_source(paragraphs=12)
         first = chunking.chunk_text(text, target_chars=800, max_chars=1_000)

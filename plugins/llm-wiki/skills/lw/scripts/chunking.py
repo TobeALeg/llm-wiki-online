@@ -88,6 +88,9 @@ def chunk_text(
             flush()
             stack = stack[: block.level - 1] + [block.heading_text]
             block.path = tuple(stack)
+            if block.end - block.start > max_chars:
+                _emit_oversized(chunks, text, block, max_chars)
+                continue
             buffer.append(block)
             if block.end - block.start >= target_chars:
                 flush()

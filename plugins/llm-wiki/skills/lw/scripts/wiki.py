@@ -420,6 +420,7 @@ def create_run(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
         "files": files,
         "units": units,
         "drafted_pages": [],
+        "abandoned_sources": [],
     }
     save_run(root, run)
     return run
@@ -467,8 +468,13 @@ def drop_drifted_sources(root: Path, run: dict[str, Any], batch: list[dict[str, 
     run["units"] = [
         unit for unit in run["units"] if unit.get("done") or unit["path"] not in abandoned
     ]
+    prepared = run.setdefault("abandoned_sources", [])
     for path in abandoned:
-        run["files"].pop(path, None)
+        entry = run["files"].pop(path, None)
+        # An already-drafted page cites the revision the model actually read, so keep that
+        # source id available: a later draft of the same run must still be able to commit.
+        if entry and entry.get("source_id") and entry["source_id"] not in prepared:
+            prepared.append(entry["source_id"])
     batch[:] = [unit for unit in batch if unit["path"] not in abandoned]
     return drifted
 
@@ -734,6 +740,7 @@ def commit_update(root: Path, state: dict[str, Any], run: dict[str, Any], record
     all_episodes = [read_json(path) for path in (wiki_path(root) / "episodes").glob("*.json")]
     allowed_sources = known_sources(root, records, all_episodes)
     allowed_sources.update(entry["source_id"] for entry in run["files"].values())
+    allowed_sources.update(run.get("abandoned_sources", []))
     allowed_sources.update(f"episode:{episode['id']}" for episode in episodes)
     validated = [validate_page(page, allowed_sources) for page in pages]
     changed = []
