@@ -670,6 +670,39 @@ class FailureAndResumeTests(WikiIngestTestCase):
         self.assertEqual(list(wiki.runs_dir(self.root).glob("*.json")), [])
         self.assertIsNone(wiki.load_run(self.root))
 
+    def test_an_unreadable_manifest_is_set_aside_and_the_next_run_proceeds(self):
+        """Found by review: external corruption of a manifest stalled every later update."""
+
+        broken_cases = {
+            "not json at all": "{ this is not json",
+            "missing units": json.dumps({"run_id": "run-x", "files": {}}),
+            "units not a list": json.dumps({"run_id": "run-x", "files": {}, "units": {}}),
+            "files not a dict": json.dumps({"run_id": "run-x", "files": [], "units": []}),
+            "missing run_id": json.dumps({"files": {}, "units": []}),
+        }
+
+        for label, content in broken_cases.items():
+            with self.subTest(broken=label):
+                runs = wiki.runs_dir(self.root)
+                runs.mkdir(parents=True, exist_ok=True)
+                for existing in runs.glob("*"):
+                    existing.unlink()
+                (runs / "run-broken.json").write_text(content, encoding="utf-8")
+
+                self.assertIsNone(wiki.load_run(self.root), f"{label} is not a usable run")
+                self.assertEqual(
+                    list(runs.glob("*.json")), [], f"{label} is moved out of the way"
+                )
+                self.assertTrue(list(runs.glob("*.broken")), f"{label} is kept for inspection")
+
+                self.write("notes.md", f"Content for {label}.\n")
+                calls = []
+                with mock.patch.object(wiki, "call_model", side_effect=answering_model(calls)):
+                    wiki.do_update(self.root, args())
+
+                self.assertTrue(calls, f"{label} must not stop the update")
+                self.assertEqual(len(list(self.pages_dir.glob("*.md"))), 1)
+
 
 class ModelPayloadTests(WikiIngestTestCase):
     def test_the_batch_carries_chunk_text_offsets_and_a_short_handle(self):

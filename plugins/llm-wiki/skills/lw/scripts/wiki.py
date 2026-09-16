@@ -435,6 +435,19 @@ def save_run(root: Path, run: dict[str, Any]) -> None:
     write_json(location / f"{run['run_id']}.json", run)
 
 
+def valid_run(run: Any) -> bool:
+    """A run manifest must carry the shape the rest of the pipeline indexes into."""
+
+    return (
+        isinstance(run, dict)
+        and isinstance(run.get("run_id"), str)
+        and bool(run.get("run_id"))
+        and isinstance(run.get("files"), dict)
+        and isinstance(run.get("units"), list)
+        and all(isinstance(unit, dict) and "path" in unit for unit in run["units"])
+    )
+
+
 def load_run(root: Path) -> dict[str, Any] | None:
     location = runs_dir(root)
     if not location.is_dir():
@@ -444,7 +457,18 @@ def load_run(root: Path) -> dict[str, Any] | None:
         return None
     # One open run per project is the invariant; newest wins if a crash ever leaves two.
     newest = max(manifests, key=lambda path: (path.stat().st_mtime, path.name))
-    return read_json(newest)
+    try:
+        run = read_json(newest)
+    except WikiError:
+        run = None
+    if not valid_run(run):
+        # A manifest the pipeline cannot read must not make the wiki unusable. Set it
+        # aside so the next plan starts clean, and say so rather than failing silently.
+        quarantined = newest.with_name(newest.name + ".broken")
+        newest.replace(quarantined)
+        print(f"discarded unreadable run {newest.name}: moved to {quarantined.name}")
+        return None
+    return run
 
 
 def drop_drifted_sources(root: Path, run: dict[str, Any], batch: list[dict[str, Any]]) -> list[str]:

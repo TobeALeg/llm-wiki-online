@@ -43,3 +43,5 @@ ts	phase	decision	why	evidence	result
 2026-09-16T12:15:00Z	fix	原子写入第一版用同名临时文件，跨批次同 slug 时第二次 rename 找不到源文件；改为按 slug 去重（保留最后一次）并使用唯一临时名	我自己引入的回归，被既有测试当场抓住——这正是先写测试的价值	全量 134 测试绿	绿
 2026-09-16T12:30:00Z	fix	不再逐点补漏，而是消除整族缺陷的前提：提交失败时 discard_run 丢弃不可用的草稿并把块进度重置，使下一次重试必然重新请求模型	五轮验证各找到新入口，说明只要	manifest	能存下无法提交的东西就会卡死这个前提才是根因；不能穷举所有提交失败方式，但能让运行无法被已存草稿劫持
 tests/test_lw_ingest.py:test_a_deterministic_commit_failure_does_not_wedge_at_zero_requests	绿，回退即红，135 测试				
+2026-09-16T13:00:00Z	verify	第六个验证者给 PASS+NOTES：五个历史场景全部确认修复，隔离对比确认结构性修复有效，且在正常运行路径（模型输出、来源编辑、崩溃、磁盘满、只读目录）下找不到任何 0 请求卡死	这是我一直在找的结论：该族缺陷的可行入口已被封死，而不只是堵了六个点	验证者表格：5/5 历史场景在旧 head 卡死、在新 head 收敛	VERIFIED
+2026-09-16T13:10:00Z	fix	manifest 被外部损坏（非法 JSON、缺 units、类型错误）时不再抛未捕获异常：load_run 校验形状，不合格的移到 .broken 并继续下一次规划	验证者点名这是残留的最后一个 0 请求卡死，且属本次引入的接口面；.broken 后缀不会被下次 glob 读取，保留供排查	tests/test_lw_ingest.py:test_an_unreadable_manifest_is_set_aside_and_the_next_run_proceeds	绿，回退即红，136 测试
