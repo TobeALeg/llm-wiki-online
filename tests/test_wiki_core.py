@@ -7,12 +7,22 @@ REPO_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(REPO_ROOT / "plugins" / "llm-wiki"))
 
 from llm_wiki_mcp.core import (  # noqa: E402
+    DIRECT,
+    DIRECT_SUBMIT_MAX_CHARS,
+    MAX_CATALOG_CHARS,
     MAX_EXISTING_CHARS,
+    MAX_EXISTING_PAGES,
     MAX_MATERIAL_CHARS,
+    MAX_MATERIAL_CONTENT_CHARS,
     MAX_OUTPUT_CHARS,
+    MAX_PAGE_BODY_CHARS,
+    MAX_ROUTE_OUTPUT_CHARS,
     MODEL_CONTEXT_TOKENS,
+    ROUTED,
     CoreError,
     WikiCore,
+    normalize_material,
+    submit_mode,
 )
 
 
@@ -111,6 +121,40 @@ class BudgetInvariantTests(unittest.TestCase):
             MAX_MATERIAL_CHARS + MAX_EXISTING_CHARS + MAX_OUTPUT_CHARS,
             MODEL_CONTEXT_TOKENS,
         )
+
+    def test_every_routed_request_stays_under_the_model_context_window(self):
+        # The routed path makes two calls. Each one must fit the window on its own; summing
+        # both would be wrong, since they are sequential requests, not one payload.
+        routing_call = MAX_MATERIAL_CHARS + MAX_CATALOG_CHARS + MAX_ROUTE_OUTPUT_CHARS
+        merging_call = MAX_MATERIAL_CHARS + MAX_EXISTING_CHARS + MAX_OUTPUT_CHARS
+        for name, budget in (("routing", routing_call), ("merging", merging_call)):
+            with self.subTest(phase=name):
+                self.assertLessEqual(budget, MODEL_CONTEXT_TOKENS)
+
+    def test_the_material_limit_is_not_silently_the_page_body_limit(self):
+        self.assertEqual(MAX_MATERIAL_CONTENT_CHARS, MAX_PAGE_BODY_CHARS)
+        with self.assertRaisesRegex(CoreError, "100000 character limit"):
+            normalize_material({"source_id": "s", "content": "x" * (MAX_MATERIAL_CONTENT_CHARS + 1)})
+
+
+class SubmitModeTests(unittest.TestCase):
+    def test_a_small_project_submits_its_full_text(self):
+        self.assertEqual(submit_mode(3, 1_000), DIRECT)
+        self.assertEqual(submit_mode(0, 0), DIRECT)
+
+    def test_the_size_trigger_is_the_boundary_itself(self):
+        self.assertEqual(submit_mode(1, DIRECT_SUBMIT_MAX_CHARS), DIRECT)
+        self.assertEqual(submit_mode(1, DIRECT_SUBMIT_MAX_CHARS + 1), ROUTED)
+
+    def test_a_project_too_large_to_submit_directly_routes(self):
+        # Past MAX_EXISTING_PAGES a direct submit cannot run, so routing is the only option
+        # even though the pages themselves are tiny.
+        self.assertEqual(submit_mode(MAX_EXISTING_PAGES + 1, 10), ROUTED)
+
+    def test_many_short_pages_do_not_route_on_page_count_alone(self):
+        # A catalog entry costs about 300 characters of identity while a body can be one
+        # character long, so page count is not a cost trigger.
+        self.assertEqual(submit_mode(MAX_EXISTING_PAGES, 200), DIRECT)
 
 
 if __name__ == "__main__":

@@ -16,8 +16,21 @@ MODEL_CONTEXT_TOKENS = 1_000_000
 MAX_MATERIAL_CHARS = 180_000
 MAX_OUTPUT_CHARS = 240_000
 MAX_PAGE_BODY_CHARS = 100_000
+# One material's body ceiling. It deliberately equals MAX_PAGE_BODY_CHARS, but the material
+# contract is no longer expressed as "the page body limit applied by default".
+MAX_MATERIAL_CONTENT_CHARS = 100_000
 MAX_EXISTING_PAGES = 500
 MAX_EXISTING_CHARS = 500_000
+# Above this snapshot size a submit routing the whole project through the model costs more
+# than sending a catalog and reading back only the affected pages. Below it the extra round
+# trip is pure overhead, so a young project submits its full text directly.
+DIRECT_SUBMIT_MAX_CHARS = 40_000
+# A catalog row carries identity only, but it still costs its JSON envelope on top of the
+# five fields. 300 characters per entry against MAX_EXISTING_PAGES leaves room to spare.
+MAX_CATALOG_CHARS = 200_000
+# The routing call answers with selected slugs, not page bodies. Each slug is capped at 80
+# characters and there can be at most MAX_EXISTING_PAGES of them.
+MAX_ROUTE_OUTPUT_CHARS = 50_000
 ALLOWED_TYPES = {
     "concept",
     "decision",
@@ -35,6 +48,30 @@ SOURCE_PATTERN = re.compile(r"^[^\s\x00-\x1f]{1,240}$")
 
 class CoreError(ValueError):
     """A caller-actionable contract or model-output error."""
+
+
+DIRECT = "direct"
+ROUTED = "routed"
+
+
+def submit_mode(page_count: int, snapshot_chars: int) -> str:
+    """Choose how one submit reaches the model.
+
+    Two triggers, and only one of them is about cost. The size trigger is the cost
+    argument: past `DIRECT_SUBMIT_MAX_CHARS` a full-snapshot submit spends more than a
+    catalog submit that reads back only the affected pages. The page trigger is a
+    capability argument, not a cost one: past `MAX_EXISTING_PAGES` a direct submit cannot
+    run at all, because `normalize_existing_pages` rejects it. Page count is deliberately
+    not a second cost knob, since a catalog entry has a floor of roughly 300 characters
+    while a page body has none, so a project of many short pages would pay more for the
+    catalog than for the snapshot.
+    """
+
+    if snapshot_chars > DIRECT_SUBMIT_MAX_CHARS:
+        return ROUTED
+    if page_count > MAX_EXISTING_PAGES:
+        return ROUTED
+    return DIRECT
 
 
 def now_iso() -> str:
@@ -66,7 +103,11 @@ def normalize_material(material: Any) -> dict[str, str]:
     if forbidden:
         raise CoreError("Materials may contain content and source metadata, not paths or commands.")
     source_id = _source_id(material.get("source_id", material.get("id")))
-    content = _clean_string(material.get("content", material.get("text")), "material content")
+    content = _clean_string(
+        material.get("content", material.get("text")),
+        "material content",
+        max_chars=MAX_MATERIAL_CONTENT_CHARS,
+    )
     if not content:
         raise CoreError(f"Material {source_id} must contain content.")
     kind = _clean_string(material.get("kind", "material"), "material kind", max_chars=40)
