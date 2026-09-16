@@ -192,6 +192,11 @@ class IngestEndToEndTests(unittest.TestCase):
 
     def test_the_tail_of_a_long_document_reaches_the_model(self):
         self.write_documents(1)
+        self.assertGreater(
+            len((self.root / "notes-1.md").read_text(encoding="utf-8")),
+            24_000,
+            "the fixture must cross the old 24,000 character excerpt boundary",
+        )
         stub = StubModel()
         self.addCleanup(stub.stop)
 
@@ -229,6 +234,50 @@ class IngestEndToEndTests(unittest.TestCase):
             self.assertEqual(len(record["chunks_done"]), record["chunks_total"])
             self.assertGreater(record["chunks_total"], 0)
         self.assertEqual(len(set(self.chunk_ids_done())), len(self.chunk_ids_done()))
+
+    def run_cli_status(self, *arguments):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "status", "--root", str(self.root), *arguments],
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+
+    def test_a_stopped_run_leaves_completed_and_pending_parts_visible(self):
+        """DoD (b): after a run stops part way, what is done and what is not must both show."""
+
+        self.write_documents(8)
+        failing = StubModel(fail_on=2)
+        self.addCleanup(failing.stop)
+
+        self.assertNotEqual(self.run_cli(failing).returncode, 0)
+
+        status = self.run_cli_status()
+
+        self.assertEqual(status.returncode, 0, status.stderr)
+        lines = [line for line in status.stdout.splitlines() if line.startswith("run ")]
+        self.assertTrue(lines, "status must report the open run")
+        statuses = {line.split()[1].rstrip(":") for line in lines}
+        self.assertIn("deferred", statuses, "the unfinished part must still be visible")
+        self.assertTrue(
+            statuses & {"complete", "partial"},
+            "the part the run already got through must be visible too",
+        )
+        # Each line reports done/total, and the reported status must match that pair.
+        for line in lines:
+            name = line.split()[1].rstrip(":")
+            done, total = (int(part) for part in line.rsplit("(", 1)[1].split()[0].split("/"))
+            self.assertLessEqual(done, total)
+            if name == "complete":
+                self.assertEqual(done, total)
+            elif name == "partial":
+                self.assertTrue(0 < done < total, line)
+            elif name == "deferred":
+                self.assertEqual(done, 0, line)
+            else:
+                self.fail(f"unexpected run status: {line}")
+        pending = self.state()["files"]
+        self.assertNotEqual(len(pending), 8, "a stopped run must not mark every source complete")
 
     def test_a_second_run_with_no_changes_calls_no_model(self):
         self.write_documents(1)

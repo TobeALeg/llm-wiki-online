@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -119,6 +120,24 @@ class StateMigrationTests(WikiIngestTestCase):
         self.state_file().write_text(json.dumps({"version": 99}), encoding="utf-8")
         with self.assertRaises(wiki.WikiError):
             wiki.load_state(self.root)
+
+    def test_the_upgrade_keeps_a_copy_of_the_previous_state_file(self):
+        self.write("notes.md", "A decision.\n")
+        legacy = {"version": 1, "files": {"notes.md": {"sha256": "old", "bytes": 12}}, "pages": {}}
+        self.state_file().write_text(json.dumps(legacy), encoding="utf-8")
+
+        wiki.load_state(self.root)
+
+        backup = self.root / ".llm-wiki" / "state.v1.json"
+        self.assertTrue(backup.is_file(), "the rewritten state needs a copy to compare against")
+        self.assertEqual(json.loads(backup.read_text(encoding="utf-8")), legacy)
+
+    def test_a_malformed_state_file_raises_a_wiki_error_not_a_crash(self):
+        for broken in ({"version": 1, "files": []}, {"version": 1, "files": {"a.md": "nope"}}):
+            with self.subTest(broken=broken):
+                self.state_file().write_text(json.dumps(broken), encoding="utf-8")
+                with self.assertRaises(wiki.WikiError):
+                    wiki.load_state(self.root)
 
     def test_unverified_files_are_re_ingested_then_become_complete(self):
         self.write("notes.md", "A decision.\n")
@@ -334,6 +353,48 @@ class FailureAndResumeTests(WikiIngestTestCase):
         self.write("notes.md", "Replaced while the run was open.\n")
         with self.assertRaises(wiki.WikiError):
             wiki.unit_text(self.root, run["units"][0])
+
+    def test_a_source_edited_during_a_run_is_abandoned_and_the_run_still_finishes(self):
+        """A moved source must not wedge every later retry against the same run."""
+
+        self.write("keeper.md", "Keeper fact.\n")
+        self.write("mover.md", long_document(paragraphs=20))
+        state, records = self.rebuild()
+        run = wiki.create_run(self.root, wiki.plan_ingest(state, records))
+        self.assertTrue([unit for unit in run["units"] if unit["path"] == "mover.md"])
+
+        self.write("mover.md", "Something else entirely.\n")
+        dropped = wiki.drop_drifted_sources(self.root, run, list(run["units"]))
+
+        self.assertEqual(dropped, ["mover.md"])
+        self.assertNotIn("mover.md", {unit["path"] for unit in run["units"]})
+        self.assertNotIn("mover.md", run["files"])
+        self.assertIn("keeper.md", {unit["path"] for unit in run["units"]})
+
+        calls = []
+        with mock.patch.object(wiki, "material_budget", return_value=20):
+            with mock.patch.object(wiki, "call_model", side_effect=answering_model(calls)):
+                wiki.do_update(self.root, args())
+
+        self.assertIsNone(wiki.load_run(self.root), "the run converges instead of sticking")
+        state = wiki.load_state(self.root)
+        self.assertEqual(state["files"]["keeper.md"]["status"], "complete")
+        self.assertNotIn("mover.md", state["files"], "an abandoned source is not marked complete")
+        self.assertIn("mover.md", wiki.scan_records(self.root), "it stays live for the next run")
+
+    def test_two_manifests_resolve_to_the_newest_not_an_arbitrary_one(self):
+        self.write("xyz.md", long_document(paragraphs=20))
+        state, records = self.rebuild()
+        newest = wiki.create_run(self.root, wiki.plan_ingest(state, records))
+        stale = wiki.runs_dir(self.root) / "run-0000000000000000.json"
+        stale.write_text(json.dumps({**newest, "run_id": "run-0000000000000000"}), encoding="utf-8")
+        # Make the lexicographically-first name genuinely the older file.
+        older = stale.stat().st_mtime - 600
+        os.utime(stale, (older, older))
+
+        chosen = wiki.load_run(self.root)
+
+        self.assertEqual(chosen["run_id"], newest["run_id"])
 
 
 class ModelPayloadTests(WikiIngestTestCase):

@@ -104,11 +104,18 @@ def require_wiki(root: Path) -> Path:
 
 
 def migrate_state(state: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(state, dict):
+        raise WikiError("state.json must contain an object.")
+    previous = state.get("files", {})
+    if not isinstance(previous, dict):
+        raise WikiError("state.json field 'files' must be an object.")
     files = {}
-    for path, record in state.get("files", {}).items():
+    for path, record in previous.items():
+        if not isinstance(record, dict):
+            raise WikiError(f"state.json entry for {path} must be an object.")
         files[path] = {
-            "sha256": record.get("sha256", ""),
-            "bytes": record.get("bytes", 0),
+            "sha256": str(record.get("sha256", "")),
+            "bytes": int(record.get("bytes", 0) or 0),
             "status": "unverified",
             "reason": "recorded by a version that tracked no per-chunk coverage; re-ingested once to verify the whole file",
             "chunks_total": 0,
@@ -126,13 +133,18 @@ def migrate_state(state: dict[str, Any]) -> dict[str, Any]:
 
 def load_state(root: Path) -> dict[str, Any]:
     location = require_wiki(root)
-    state = read_json(location / "state.json")
+    state_file = location / "state.json"
+    state = read_json(state_file)
     version = state.get("version")
     if version == STATE_VERSION:
         return state
     if version == 1:
+        # The upgrade rewrites records in place, so keep the previous file for a human to compare.
+        backup = location / "state.v1.json"
+        if not backup.exists():
+            backup.write_text(state_file.read_text(encoding="utf-8"), encoding="utf-8")
         state = migrate_state(state)
-        write_json(location / "state.json", state)
+        write_json(state_file, state)
         return state
     raise WikiError(f"Unsupported state version: {version}")
 
@@ -423,10 +435,42 @@ def load_run(root: Path) -> dict[str, Any] | None:
     location = runs_dir(root)
     if not location.is_dir():
         return None
-    manifests = sorted(location.glob("*.json"))
+    manifests = list(location.glob("*.json"))
     if not manifests:
         return None
-    return read_json(manifests[0])
+    # One open run per project is the invariant; newest wins if a crash ever leaves two.
+    newest = max(manifests, key=lambda path: (path.stat().st_mtime, path.name))
+    return read_json(newest)
+
+
+def drop_drifted_sources(root: Path, run: dict[str, Any], batch: list[dict[str, Any]]) -> list[str]:
+    """Abandon the unfinished units of any source whose bytes moved under the run.
+
+    A source that changed mid-run cannot be chunked consistently with what was
+    already sent, so its remaining units are dropped rather than sent against a
+    different revision. Nothing is recorded for it, so a later run plans it
+    again from its current content.
+    """
+
+    drifted: list[str] = []
+    for unit in batch:
+        path = unit["path"]
+        if path in drifted:
+            continue
+        try:
+            unit_text(root, unit)
+        except WikiError:
+            drifted.append(path)
+    if not drifted:
+        return []
+    abandoned = set(drifted)
+    run["units"] = [
+        unit for unit in run["units"] if unit.get("done") or unit["path"] not in abandoned
+    ]
+    for path in abandoned:
+        run["files"].pop(path, None)
+    batch[:] = [unit for unit in batch if unit["path"] not in abandoned]
+    return drifted
 
 
 def commit_run(root: Path, run: dict[str, Any]) -> None:
@@ -630,8 +674,6 @@ def batch_payload(root: Path, run: dict[str, Any], batch: list[dict[str, Any]], 
     ordinals = {unit["chunk_id"]: number for number, unit in enumerate(run["units"], start=1)}
     chunks = []
     for unit in batch:
-        # Refuse to extend a run whose source moved under it, then send the chunk as it was parsed.
-        unit_text(root, unit)
         chunks.append({
             "handle": f"c{ordinals[unit['chunk_id']]:03d}",
             "chunk_id": unit["chunk_id"],
@@ -743,6 +785,13 @@ def do_update(root: Path, args: argparse.Namespace) -> None:
     if not batches and episodes:
         batches = [[]]
     for batch in batches:
+        drifted = drop_drifted_sources(root, run, batch)
+        if drifted:
+            save_run(root, run)
+            for path in drifted:
+                print(f"skipped {path}: changed while the run was open; it will be planned again")
+        if not batch:
+            continue
         update = call_model(batch_payload(root, run, batch, diff, episodes), purpose, list(pages_by_slug.values()))
         if not isinstance(update, dict):
             raise WikiError("The model returned a non-object update.")
