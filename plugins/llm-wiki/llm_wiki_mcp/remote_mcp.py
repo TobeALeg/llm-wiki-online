@@ -82,7 +82,8 @@ def create_remote_mcp(
 ) -> FastMCP:
     """Create the protected `/mcp` server and register its first read seam."""
 
-    issuer = AnyHttpUrl(issuer_url)
+    issuer = AnyHttpUrl(issuer_url.rstrip("/"))
+    resource = AnyHttpUrl(issuer_url.rstrip("/") + "/mcp")
     server = FastMCP(
         "llm-wiki-remote",
         instructions=(
@@ -91,8 +92,8 @@ def create_remote_mcp(
         ),
         auth=AuthSettings(
             issuer_url=issuer,
-            resource_server_url=issuer,
-            required_scopes=["wiki:read"],
+            resource_server_url=resource,
+            required_scopes=["wiki:read", "wiki:write"],
         ),
         token_verifier=SubjectBoundTokenVerifier(auth),
         stateless_http=True,

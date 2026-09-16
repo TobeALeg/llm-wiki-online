@@ -1,113 +1,63 @@
-# LLM Wiki plugin, shared service, and local MCP server
+# LLM Wiki Company MCP
 
-This plugin exposes project-scoped local Wikis to Codex over stdio and a protected
-company Wiki over Streamable HTTP MCP. Project files remain local. The local
-allowlist is used by local tools; the company service accepts selected content and
-never a caller-provided server path. Its single bundled skill keeps the explicit
-`/lw` name.
+LLM Wiki Company MCP 是公司共享 Wiki 的受保护远程 MCP 服务。所有启用的 mentti
+成员读取和维护同一份已提交知识；本地文件不会被自动扫描或上传。
 
-## Install
+## 服务地址
 
-Python 3.10 or newer is required.
-
-### Windows PowerShell
-
-```powershell
-git clone https://github.com/TobeALeg/llm-wiki-online.git
-cd llm-wiki-online
-py -m venv .venv
-.\.venv\Scripts\python -m pip install -e .\plugins\llm-wiki
-$env:DEEPSEEK_API_KEY = "your-key"
+```text
+https://lw.app.mentti.work/mcp
 ```
 
-### macOS or Linux
+传输协议为 MCP Streamable HTTP。推荐使用 OAuth 2.1；不支持 OAuth 的终端客户端可以
+使用网页生成的个人 MCP Key。
+
+## 推荐：OAuth 2.1
+
+支持 MCP OAuth 的客户端只需添加服务地址，然后完成一次 mentti 浏览器授权。客户端保存
+refresh token 后会静默续期，不需要每次使用都重新登录。
 
 ```bash
-git clone https://github.com/TobeALeg/llm-wiki-online.git
-cd llm-wiki-online
-python3 -m venv .venv
-.venv/bin/python -m pip install -e ./plugins/llm-wiki
-export DEEPSEEK_API_KEY="your-key"
+codex mcp add lw-company --url https://lw.app.mentti.work/mcp
+codex mcp login lw-company
 ```
 
-## Allow a project
+服务公开 OAuth Protected Resource Metadata、Authorization Server Metadata、动态客户端
+注册、Authorization Code + PKCE 和轮换式 refresh token。
 
-Choose a short project ID. The MCP tools receive this ID, never an arbitrary local path.
+## 备选：个人 MCP Key
 
-```powershell
-.\.venv\Scripts\llm-wiki-projects.exe add my-project "D:\work\my-project" --init
-.\.venv\Scripts\llm-wiki-projects.exe list
-```
-
-On macOS or Linux, use `.venv/bin/llm-wiki-projects` instead. Registry data is stored in `~/.llm-wiki/projects.json`. Set `LLM_WIKI_REGISTRY` to override that location.
-
-## Run locally
-
-For a direct local Codex connection, use stdio:
+1. 登录 `https://lw.app.mentti.work/mcp/setup`。
+2. 点击“生成 Key”，立即复制页面只显示一次的 `lw_pat_...`。
+3. 在启动 Codex 的终端中配置：
 
 ```bash
-codex mcp add llm-wiki -- /absolute/path/to/llm-wiki-online/.venv/bin/llm-wiki-mcp
-codex mcp list
+export LW_MCP_TOKEN='粘贴网页生成的 Key'
+codex mcp add lw-company \
+  --url https://lw.app.mentti.work/mcp \
+  --bearer-token-env-var LW_MCP_TOKEN
 ```
 
-On Windows, pass the absolute path to `.venv\Scripts\llm-wiki-mcp.exe`. Start Codex from a shell where `DEEPSEEK_API_KEY` is set.
+Key 与个人 mentti 身份绑定，可以在 `/mcp/setup` 撤销；成员被停用后已有 Key 也会失效。
+不要把 Key 写入仓库、聊天记录或共享文档。
 
-For an HTTP endpoint reachable by a local tunnel client:
+## 能力与数据边界
+
+- `company_wiki_status`、`company_wiki_search`、`company_wiki_page`：读取公司 Wiki。
+- `company_wiki_versions`、`company_wiki_restore`：查看和恢复版本。
+- `company_wiki_submit`：明确提交选定材料到公司 Wiki。
+- `local_wiki_organize`：整理调用方明确提供的材料但不在本服务持久化；材料仍会发送给
+  配置的模型提供商。
+- `company_wiki_revoke_credential`：撤销当前调用使用的凭证。
+
+写入使用 `base_version` 防止静默覆盖，并使用 `idempotency_key` 保证安全重试。工具执行
+失败会通过 MCP 的 `result.isError` 返回；身份失败使用 HTTP 401。
+
+## 验证
 
 ```bash
-llm-wiki-mcp --transport streamable-http --host 127.0.0.1 --port 4310
+curl -sS https://lw.app.mentti.work/.well-known/oauth-protected-resource/mcp
+curl -sS https://lw.app.mentti.work/.well-known/oauth-authorization-server
 ```
 
-The endpoint is `http://127.0.0.1:4310/mcp`. It intentionally binds to loopback and has no application-level authentication; do not bind it to a public interface.
-
-## Run the protected company service
-
-Set `LLM_WIKI_REMOTE=true`, `LLM_WIKI_DATABASE` and the mentti/model variables from
-`.env.production.example`, then start the two entry points:
-
-```bash
-llm-wiki-web --host 127.0.0.1 --port 8000
-llm-wiki-mcp --transport streamable-http --host 127.0.0.1 --port 4310
-```
-
-The browser API and `/mcp` share one SQLite database. The first login uses the
-mentti authorization-code callback; an authenticated member then obtains a short-
-lived, revocable MCP Bearer credential from `/api/mcp-token`. No subject or email
-argument can override its identity.
-
-## Connect ChatGPT web privately
-
-1. Create a tunnel in OpenAI Platform tunnel settings and obtain its `tunnel_id` and runtime API key.
-2. Install `tunnel-client` from the download link in those settings.
-3. Point a tunnel profile at `http://127.0.0.1:4310/mcp`, run `doctor`, then keep the profile running.
-4. In ChatGPT, enable Developer mode under **Settings → Security and login**. Create a plugin connection, choose **Tunnel**, and select the tunnel.
-
-```bash
-export CONTROL_PLANE_API_KEY="sk-..."
-tunnel-client init --sample sample_mcp_stdio_local --profile llm-wiki --tunnel-id tunnel_... --mcp-server-url http://127.0.0.1:4310/mcp
-tunnel-client doctor --profile llm-wiki --explain
-tunnel-client run --profile llm-wiki
-```
-
-The local MCP server and `tunnel-client` must both remain running while ChatGPT uses the Wiki.
-
-## MCP tools
-
-- `list_wiki_projects`
-- `initialize_wiki`
-- `save_episode`
-- `update_wiki`
-- `query_wiki`
-- `wiki_status`
-- `scan_wiki`
-- `get_wiki_page`
-- `lint_wiki`
-
-`save_episode` records selected conversation knowledge without paying for a model call. `update_wiki` consolidates pending project files and episodes with DeepSeek. The default model is `deepseek-flash`; override it with `LLM_WIKI_MODEL` or the API base with `LLM_WIKI_BASE_URL`.
-
-The protected company MCP additionally exposes `local_wiki_organize` for a
-selected local material set (it returns a validated package without writing to
-the company database), plus `company_wiki_status`, `company_wiki_search`,
-`company_wiki_page`, `company_wiki_versions`, `company_wiki_submit`, and
-`company_wiki_restore`. Browser access is read-only; company writes go through
-the authenticated MCP tools.
+健康检查位于 `https://lw.app.mentti.work/healthz`，只返回存储、身份和模型配置状态。

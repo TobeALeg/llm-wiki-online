@@ -18,7 +18,8 @@ GitHub issue 或提交记录。
 2. 配置 `lw.app.mentti.work` DNS，再分别验证服务器 80/443、TLS 证书和 Nginx
    `/mcp` 反向代理。mentti 登记、DNS、TLS 和代理不是同一个验收项。
 3. 在服务器部署 Nginx 配置和 Compose 服务，执行 `docker compose up -d --build --wait`，再确认 `/healthz` 返回 `status=ok`。
-4. 检查 `/healthz`、登录回调、`/api/mcp-token` 和远程 `/mcp` 的真实调用。
+4. 检查 `/healthz`、登录回调、两个 `/.well-known/` OAuth 元数据、PKCE 授权码与
+   refresh token 轮换、`/mcp/setup` 个人 Key，以及远程 `/mcp` 的真实调用。
 
 Compose 将 web 和 mcp 仅绑定到宿主机回环地址 8000/4310，宿主机 Nginx 使用这两个
 地址转发；它们不会直接暴露到公网。若使用 GitHub Actions 部署，还需配置
@@ -50,7 +51,8 @@ llm-wiki-ops restore /var/backups/llm-wiki/wiki.sqlite3 /var/lib/llm-wiki/restor
 ## 真实上线验收
 
 模拟模型测试只证明协议、事务和安全边界，不证明真实整理质量。可用上线前必须
-使用授权的代表性材料完成：mentti 登录、真实 Codex/WorkBuddy MCP 只读调用、本地
+使用授权的代表性材料完成：mentti 登录、真实 Codex/WorkBuddy OAuth MCP 调用、个人 Key
+调用、refresh token 静默续期与撤销、本地
 不落盘、两名成员共享读写、冲突、幂等、历史恢复、停用通知、服务重启保留数据、
 备份隔离恢复，以及 HTTPS/匿名拒绝检查。
 

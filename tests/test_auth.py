@@ -1,4 +1,5 @@
 import sys
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -63,6 +64,25 @@ class AuthTests(unittest.TestCase):
         service.revoke_mcp_token(credential["access_token"])
         with self.assertRaises(AuthError):
             service.authenticate_mcp_token(credential["access_token"])
+
+    def test_existing_auth_database_is_migrated_without_losing_tokens(self):
+        database = Path(self.temporary.name) / "legacy.sqlite3"
+        with sqlite3.connect(database) as db:
+            db.executescript("""
+                CREATE TABLE mcp_tokens (
+                    token_hash TEXT PRIMARY KEY, subject TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL, revoked_at INTEGER
+                );
+                CREATE TABLE oauth_states (
+                    state_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL
+                );
+            """)
+        AuthStore(database)
+        with sqlite3.connect(database) as db:
+            token_columns = {row[1] for row in db.execute("PRAGMA table_info(mcp_tokens)")}
+            state_columns = {row[1] for row in db.execute("PRAGMA table_info(oauth_states)")}
+        self.assertTrue({"credential_id", "label", "token_kind", "created_at"} <= token_columns)
+        self.assertIn("return_to", state_columns)
 
     def test_webhook_signature_and_ordering(self):
         body = b'{"event":"member.disabled"}'

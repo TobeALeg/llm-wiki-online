@@ -62,7 +62,8 @@
 - 使用不可变 subject 关联操作者，邮箱和姓名仅作为可更新的身份资料。
 - mentti 当前已检查的兑换接口返回身份资料；它不是已经实现的通用 MCP Access Token 接口。
 - lw 需要建立绑定已验证身份的 MCP 调用凭证。凭证不得由调用参数中的 subject 或邮箱决定；应用 client_secret 只用于后端间认证，不分发给用户作为个人凭证。
-- 具体凭证形式应在实施时验证目标 Agent 的支持后确定；必须具备身份绑定、到期及撤销能力。不得将完整 OAuth 支持描述为 mentti 现有能力。
+- lw 作为 MCP OAuth 2.1 授权服务器适配层，提供发现元数据、动态客户端注册、Authorization Code + PKCE、短期 access token、轮换式 refresh token 和撤销；mentti 只负责确认成员身份，不描述为通用 OAuth 提供方。
+- 不支持 OAuth 的终端客户端可由已登录成员在网页生成只显示一次的个人 MCP Key；不得要求用户从开发者工具复制 HttpOnly 会话 Cookie。
 - 所有启用成员可读写公司 Wiki；不增加按人员划分的 workspace 权限或管理员写入审批。
 - lw 可保留用于状态校验、凭证和审计的最小身份映射，但账号资料以 mentti 为唯一权威来源，不复制密码或共享 mentti 数据库、会话密钥。
 - 接收已验签的成员 Webhook，按事件标识去重并处理事件顺序；启动及定期通过成员 API 对账。

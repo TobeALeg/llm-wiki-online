@@ -1,81 +1,77 @@
-# LLM Wiki
+# LLM Wiki Company MCP
 
-LLM Wiki 将项目文件和经过选择的 Agent 对话整理成带来源记录的项目知识库，并逐步扩展为支持远程 MCP、公司共享 Wiki 和在线浏览的服务。
+LLM Wiki Company MCP 是 mentti 公司成员共同维护的远程知识库。服务通过 MCP
+Streamable HTTP 提供读取、检索、整理、提交、版本和恢复工具；网页用于阅读 Wiki、
+生成个人 MCP Key 和管理凭证。
 
-## 当前内容
+## 安装
 
-- `skills/lw/`：可显式调用的 `LLM Wiki` Agent Skill，命令名为 `/lw`。
-- `plugins/llm-wiki/`：本地 MCP 服务、Agent Plugin manifest 和 bundled skill。
-- `tests/test_llm_wiki.py`：本地 Wiki CLI 的行为测试。
-- `tests/test_llm_wiki_mcp.py`：本地 MCP 服务的行为测试。
-- `.scratch/lw-remote-shared-wiki/spec.md`：远程 MCP、公司共享 Wiki 和在线浏览规格。
-
-远程服务、mentti 身份接入、公司 Wiki 持久化和在线阅读路径已按 ticket 实施；
-真实身份、DNS/TLS、服务器部署和真实材料验收仍需按 [`docs/operations.md`](docs/operations.md)
-在目标环境执行，不应把本地模拟测试当成线上发布证明。
-
-当前已包含本地 MCP 服务，可通过 stdio 连接 Codex，也可以绑定到本机 loopback HTTP 端口供本地 tunnel 使用。它不是远程公司 Wiki 服务，也不应直接暴露到公网。安装、项目白名单和 MCP 工具说明见 [`plugins/llm-wiki/README.md`](plugins/llm-wiki/README.md)。
-
-## 本地 CLI
-
-安装 skill 后，在目标项目目录中使用：
-
-```bash
-export DEEPSEEK_API_KEY="..."
-python ~/.agents/skills/lw/scripts/wiki.py init
-python ~/.agents/skills/lw/scripts/wiki.py update --episode "本轮对话里需要长期保留的结论"
-python ~/.agents/skills/lw/scripts/wiki.py context "要查询的项目知识"
-```
-
-模型默认为 `deepseek-flash`，API 地址默认为 `https://api.deepseek.com`。项目只需按需编辑 `.llm-wiki/purpose.md`；目录、页面索引和来源记录由 skill 自动管理。
-
-可用命令包括：
+MCP 地址：
 
 ```text
-/lw              # 初始化（如需要）并更新 Wiki
-/lw init         # 只初始化
-/lw status       # 查看待处理内容
-/lw ask 为什么选择 SQLite
-/lw scan
-/lw lint
+https://lw.app.mentti.work/mcp
 ```
 
-界面中显示为 `LLM Wiki`。技能注册名 `lw` 关闭了自动触发，只有显式输入 `/lw` 或 `$lw` 时才会运行。
-
-## 安装 Agent Skill
-
-Codex 和其他 Agent Skills-compatible 客户端可以从本仓库安装：
+### OAuth 2.1（推荐）
 
 ```bash
-mkdir -p ~/.agents/skills
-cp -R skills/lw ~/.agents/skills/
+codex mcp add lw-company --url https://lw.app.mentti.work/mcp
+codex mcp login lw-company
 ```
 
-Claude Code 的安装位置是 `~/.claude/skills/lw/`。
+首次连接会打开 mentti 登录与授权页。客户端保存 refresh token 后会静默续期，不会在
+每次使用时重复打开浏览器。
 
-## 开发
+### 个人 MCP Key
+
+不支持 OAuth 的客户端使用静态 Bearer Key：
+
+1. 登录 `https://lw.app.mentti.work/mcp/setup`。
+2. 生成并立即复制只显示一次的 `lw_pat_...` Key。
+3. 在启动 Codex 的终端中执行：
+
+```bash
+export LW_MCP_TOKEN='粘贴网页生成的 Key'
+codex mcp add lw-company \
+  --url https://lw.app.mentti.work/mcp \
+  --bearer-token-env-var LW_MCP_TOKEN
+```
+
+Key 与个人 mentti 身份绑定，可在生成页面撤销；成员停用后已有 Key 和 OAuth 凭证都不能
+继续访问。不要把凭证写入仓库、聊天记录或共享文档。
+
+## 工具
+
+- `company_wiki_status`、`company_wiki_search`、`company_wiki_page`
+- `company_wiki_versions`、`company_wiki_restore`
+- `company_wiki_submit`
+- `local_wiki_organize`
+- `company_wiki_revoke_credential`
+
+公司写入必须显式调用 `company_wiki_submit`。`local_wiki_organize` 不在本服务持久化材料，
+但材料仍会发送给配置的模型提供商。详细参数和错误语义见登录后的
+`https://lw.app.mentti.work/readme.md`。
+
+## OAuth 发现
+
+```text
+https://lw.app.mentti.work/.well-known/oauth-protected-resource/mcp
+https://lw.app.mentti.work/.well-known/oauth-authorization-server
+```
+
+服务实现 Authorization Code + PKCE、动态客户端注册、短期 access token、轮换式
+refresh token 和 token revocation。mentti 仍是身份来源，lw 作为 MCP 的 OAuth 2.1
+授权服务器适配层签发仅面向 `/mcp` 的凭证。
+
+## 数据与运维
+
+- 公司 Wiki 使用固定共享范围，不接受客户端指定服务器路径。
+- 页面、来源、版本、审计和幂等记录在同一个 SQLite 事务中提交。
+- 生产配置与验收见 [`docs/operations.md`](docs/operations.md)。
+- 模块与数据流见 [`docs/architecture.md`](docs/architecture.md)。
+
+开发验证：
 
 ```bash
 python3 -m unittest discover -s tests -v
-```
-
-## 目录结构
-
-```text
-skills/lw/
-├── SKILL.md
-├── agents/openai.yaml
-├── references/architecture.md
-└── scripts/wiki.py
-
-plugins/llm-wiki/
-├── plugin.json
-├── mcp.json
-├── skills/lw/
-├── llm_wiki_mcp/
-└── README.md
-
-tests/test_llm_wiki.py
-tests/test_llm_wiki_mcp.py
-.scratch/lw-remote-shared-wiki/spec.md
 ```

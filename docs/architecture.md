@@ -9,7 +9,7 @@ Remote MCP ──────────────┤
                          ├─ reusable WikiCore (validate/organize)
 Browser API ─────────────┘
                                   │
-                          AuthService + mentti adapter
+                  OAuthService → AuthService + mentti adapter
                                   │
                           SharedWikiStore (SQLite)
                                   │
@@ -24,6 +24,13 @@ server path or a command.
 `AuthService` owns authorization-code redemption, sessions, MCP credentials,
 member status and ordered webhook/reconciliation updates. `SharedWikiStore`
 owns the one company Wiki and commits its durable records atomically.
+
+`OAuthService` is the MCP authorization-server seam. It owns protected-resource
+and authorization-server metadata, dynamic client registration, authorization
+consent, PKCE code exchange, refresh-token rotation and revocation. It delegates
+member identity to `AuthService`; mentti does not need to become a general OAuth
+provider. OAuth access tokens and browser-generated personal MCP Keys both enter
+the same subject-bound MCP token verifier.
 
 ## data flow
 
@@ -40,7 +47,7 @@ rules are not inferred by lw and remain an explicit operational concern.
 ### company mode
 
 ```text
-mentti identity → AuthService → MCP/browser request
+mentti identity → OAuthService/AuthService → MCP/browser request
                                   ↓
                     snapshot + model organization
                                   ↓
@@ -61,7 +68,9 @@ mentti member:     unknown → enabled → disabled
                                   ↑         │
                                   └─ newer authoritative reconciliation
 
-MCP credential:   issued → valid → expired/revoked
+OAuth grant:       requested → mentti login → consented → code → access + refresh
+refresh token:     valid → rotated/revoked
+personal MCP Key:  issued once → valid → expired/revoked
 
 Wiki submission:  received → organizing → validated → committed
                          └────── failed/invalid (no durable mutation)

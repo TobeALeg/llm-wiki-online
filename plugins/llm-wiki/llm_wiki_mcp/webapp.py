@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hmac
+import html
 import os
 import re
 import threading
@@ -16,6 +17,7 @@ from typing import Any
 
 from .auth import AuthError, AuthService
 from .model import ModelError
+from .oauth import OAuthError, OAuthService
 from .remote_readme import readme_bytes
 from .remote_service import RemoteWikiService
 from .shared_service import SharedWikiService
@@ -35,6 +37,10 @@ WEBHOOK_PATHS = {"/webhooks/menti/members", "/api/internal/menti/events"}
 # The MCP onboarding document is browsable next to the reader, so it follows the
 # reader's browser flow instead of the JSON 401 used by the fetch-based API.
 README_PATHS = {"/readme.md", "/readme"}
+PROTECTED_RESOURCE_PATHS = {
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/mcp",
+}
 
 
 def event_ordering(sequence: Any, occurred_at: Any) -> int:
@@ -98,7 +104,7 @@ READER_HTML = r"""<!doctype html>
   </style>
 </head>
 <body>
-  <header><h1>LLM Wiki</h1><form id="search"><input name="q" aria-label="搜索 Wiki" autocomplete="off"><button>搜索</button></form><a class="readme" href="/readme.md">MCP 接入说明</a></header>
+  <header><h1>LLM Wiki</h1><form id="search"><input name="q" aria-label="搜索 Wiki" autocomplete="off"><button>搜索</button></form><a class="readme" href="/mcp/setup">MCP Key</a><a class="readme" href="/readme.md">MCP 接入说明</a></header>
   <main><aside><h2>页面目录</h2><div id="list" class="page-list"><div class="state">正在读取…</div></div></aside><article id="detail"><div class="state">请选择一个页面。</div></article></main>
   <script>
     const list = document.getElementById('list');
@@ -145,6 +151,32 @@ READER_HTML = r"""<!doctype html>
 </html>"""
 
 
+MCP_SETUP_HTML = r"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,">
+<title>LLM Wiki Company MCP</title><style>
+body{max-width:760px;margin:48px auto;padding:0 24px;font:16px/1.65 system-ui;background:#f6f5f1;color:#20221f}
+main{background:#fffef9;border:1px solid #deddd3;border-radius:16px;padding:32px}button{padding:10px 16px;border:0;border-radius:999px;background:#275d48;color:white;font-weight:650;cursor:pointer}
+input,pre{width:100%;box-sizing:border-box;padding:12px;border:1px solid #c9c9bd;border-radius:8px;background:white}pre{white-space:pre-wrap;word-break:break-all}.warning{color:#8a4b18}a{color:#275d48}
+</style></head><body><main><p><a href="/">← 返回 Wiki</a></p><h1>Company MCP Key</h1>
+<p>为不支持 OAuth 的终端客户端生成一个个人访问令牌。Key 只显示一次，并继承你的 mentti 成员身份。</p>
+<label>名称 <input id="label" maxlength="120" value="My terminal"></label><p><button id="create">生成 Key</button></p>
+<section id="result" hidden><p class="warning">现在复制；关闭页面后无法再次查看。</p><pre id="key"></pre><pre id="command"></pre></section>
+<h2>已有 Key</h2><div id="credentials">正在读取…</div>
+<script>
+const createButton=document.getElementById('create'),labelInput=document.getElementById('label'),resultSection=document.getElementById('result'),keyOutput=document.getElementById('key'),commandOutput=document.getElementById('command'),credentials=document.getElementById('credentials');
+const escapeHtml=v=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function load(){const r=await fetch('/api/mcp-credentials');if(r.status===401){location.href='/auth/login?return_to=%2Fmcp%2Fsetup';return}const data=await r.json();credentials.innerHTML=data.credentials.length?data.credentials.map(c=>`<p><strong>${escapeHtml(c.label||c.token_kind)}</strong> · ${c.revoked_at?'已撤销':`有效至 ${new Date(c.expires_at*1000).toLocaleString()} <button data-id="${escapeHtml(c.credential_id)}">撤销</button>`}</p>`).join(''):'暂无 Key。';credentials.querySelectorAll('[data-id]').forEach(b=>b.onclick=async()=>{await fetch('/api/mcp-credentials/revoke',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential_id:b.dataset.id})});load()})}
+createButton.onclick=async()=>{const r=await fetch('/api/mcp-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:labelInput.value})});const data=await r.json();if(!r.ok){alert('生成失败');return}keyOutput.textContent=data.access_token;commandOutput.textContent=`read -s LW_MCP_TOKEN && export LW_MCP_TOKEN\ncodex mcp add lw-company --url https://lw.app.mentti.work/mcp --bearer-token-env-var LW_MCP_TOKEN`;resultSection.hidden=false;load()};load();
+</script></main></body></html>"""
+
+
+def oauth_consent_html(request: dict[str, str]) -> bytes:
+    client = html.escape(request["client_name"])
+    scope = html.escape(request["scope"])
+    pending = html.escape(request["pending_id"], quote=True)
+    return f"""<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>授权 LLM Wiki MCP</title></head><body style=\"max-width:640px;margin:64px auto;padding:0 24px;font:16px/1.6 system-ui\"><h1>授权 Company MCP</h1><p><strong>{client}</strong> 请求访问公司 Wiki。</p><p>权限：<code>{scope}</code></p><form method=\"post\" action=\"/oauth/authorize\"><input type=\"hidden\" name=\"pending_id\" value=\"{pending}\"><button name=\"decision\" value=\"approve\">允许</button> <button name=\"decision\" value=\"deny\">拒绝</button></form></body></html>""".encode()
+
+
 class WikiHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -154,10 +186,11 @@ class WikiHTTPServer(ThreadingHTTPServer):
 
 
 class WikiWebApp:
-    def __init__(self, auth: AuthService, shared: SharedWikiService, local: RemoteWikiService | None = None):
+    def __init__(self, auth: AuthService, shared: SharedWikiService, local: RemoteWikiService | None = None, oauth: OAuthService | None = None):
         self.auth = auth
         self.shared = shared
         self.local = local or RemoteWikiService()
+        self.oauth = oauth or OAuthService(auth, issuer=os.environ.get("LLM_WIKI_PUBLIC_URL", "https://lw.app.mentti.work"))
         self.max_body_bytes = int(os.environ.get("LLM_WIKI_MAX_REQUEST_BYTES", "524288"))
 
     def server(self, host: str = "127.0.0.1", port: int = 8000) -> WikiHTTPServer:
@@ -192,6 +225,10 @@ class WikiWebApp:
     def get(self, path: str, headers: dict[str, str]) -> tuple[int, dict[str, str], bytes]:
         parsed = urllib.parse.urlsplit(path)
         route = parsed.path
+        if route in PROTECTED_RESOURCE_PATHS:
+            return self.response(200, self.oauth.protected_resource_metadata())
+        if route == "/.well-known/oauth-authorization-server":
+            return self.response(200, self.oauth.authorization_server_metadata())
         if route in {"/healthz", "/api/health"}:
             try:
                 self.shared.store.current_version()
@@ -207,7 +244,13 @@ class WikiWebApp:
             authorize = os.environ.get("MENTI_AUTHORIZE_URL", "").strip()
             if not authorize:
                 raise StoreError("mentti login is not configured.")
-            state = self.auth.store.issue_state()
+            return_to = urllib.parse.parse_qs(parsed.query).get("return_to", ["/"])[0]
+            if (
+                not return_to.startswith("/") or return_to.startswith("//")
+                or len(return_to) > 4096 or any(ord(char) < 32 for char in return_to)
+            ):
+                return_to = "/"
+            state = self.auth.store.issue_state(return_to=return_to)
             query = urllib.parse.urlencode({"response_type": "code", "client_id": os.environ.get("MENTI_CLIENT_ID", ""), "redirect_uri": os.environ.get("MENTI_REDIRECT_URI", ""), "state": state})
             # Path=/ because mentti's registered callback lives under /api/auth/...,
             # so a narrower path would not be sent back on the callback request.
@@ -218,10 +261,19 @@ class WikiWebApp:
             cookie_state = next((value.split("=", 1)[1] for value in self._header(headers, "Cookie").split(";") if value.strip().startswith("lw_oauth_state=")), "")
             if not cookie_state or not hmac.compare_digest(cookie_state, state):
                 raise AuthError("OAuth state is invalid.")
-            self.auth.store.consume_state(state)
+            return_to = self.auth.store.consume_state(state)
             login = self.auth.login_with_code(query.get("code", [""])[0])
-            return 302, {"Location": "/", "Set-Cookie": f"lw_session={login['session_token']}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={self.auth.session_ttl}"}, b""
-        if route == "/" or route in README_PATHS:
+            return 302, {"Location": return_to, "Set-Cookie": f"lw_session={login['session_token']}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={self.auth.session_ttl}"}, b""
+        if route == "/oauth/authorize":
+            try:
+                member = self._member(headers)
+            except AuthError:
+                target = route + ("?" + parsed.query if parsed.query else "")
+                return 302, {"Location": "/auth/login?" + urllib.parse.urlencode({"return_to": target})}, b""
+            params = {key: values[0] for key, values in urllib.parse.parse_qs(parsed.query).items()}
+            request = self.oauth.begin_authorization(params, member["subject"])
+            return 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}, oauth_consent_html(request)
+        if route == "/" or route in README_PATHS or route == "/mcp/setup":
             # A browser lands here straight from the mentti app directory, so an
             # anonymous visitor must be sent into the login flow. The JSON 401
             # below is only correct for the fetch-based API routes.
@@ -231,6 +283,8 @@ class WikiWebApp:
                 return 302, {"Location": "/auth/login"}, b""
             if route in README_PATHS:
                 return 200, {"Content-Type": "text/markdown; charset=utf-8"}, readme_bytes()
+            if route == "/mcp/setup":
+                return 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}, MCP_SETUP_HTML.encode("utf-8")
             return 200, {"Content-Type": "text/html; charset=utf-8"}, READER_HTML.encode("utf-8")
         member = self._member(headers)
         if route == "/api/wiki/status":
@@ -254,9 +308,32 @@ class WikiWebApp:
                 raise NotFoundError(str(exc)) from exc
         if route == "/api/me":
             return self.response(200, {"member": member})
+        if route == "/api/mcp-credentials":
+            session = self._session_token(headers)
+            return self.response(200, {"credentials": self.auth.list_credentials(session)})
         raise NotFoundError("Route does not exist.")
 
+    def _session_token(self, headers: dict[str, str]) -> str:
+        return next(
+            (value.split("=", 1)[1] for value in self._header(headers, "Cookie").split(";") if value.strip().startswith("lw_session=")),
+            "",
+        )
+
+    @staticmethod
+    def _form(body: bytes) -> dict[str, str]:
+        try:
+            return {key: values[0] for key, values in urllib.parse.parse_qs(body.decode("utf-8"), keep_blank_values=True).items()}
+        except UnicodeDecodeError as exc:
+            raise OAuthError("invalid_request", "Form body must be UTF-8.") from exc
+
     def post(self, path: str, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, str], bytes]:
+        if path == "/oauth/register":
+            return self.response(201, self.oauth.register_client(self._json(body)))
+        if path == "/oauth/token":
+            return self.response(200, self.oauth.exchange_token(self._form(body)), extra_headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+        if path == "/oauth/revoke":
+            self.oauth.revoke_token(self._form(body))
+            return 200, {"Cache-Control": "no-store"}, b""
         if path in WEBHOOK_PATHS:
             secret = os.environ.get("MENTI_WEBHOOK_SECRET", "")
             if not AuthService.verify_webhook(
@@ -274,18 +351,27 @@ class WikiWebApp:
             )
             return self.response(200, {"status": result})
         member = self._member(headers)
+        if path == "/oauth/authorize":
+            form = self._form(body)
+            location = self.oauth.finish_authorization(
+                form.get("pending_id", ""), member["subject"], form.get("decision") == "approve"
+            )
+            return 302, {"Location": location, "Cache-Control": "no-store"}, b""
         payload = self._json(body)
         if path == "/api/mcp-token":
-            session = self._header(headers, "Cookie")
-            token = next((value.split("=", 1)[1] for value in session.split(";") if value.strip().startswith("lw_session=")), "")
-            return self.response(200, self.auth.issue_mcp_token(token))
+            return self.response(200, self.auth.issue_mcp_token(self._session_token(headers), str(payload.get("label", "Terminal"))))
+        if path == "/api/mcp-credentials/revoke":
+            revoked = self.auth.revoke_credential(self._session_token(headers), str(payload.get("credential_id", "")))
+            return self.response(200, {"revoked": revoked})
         if path == "/api/local/organize":
             return self.response(200, self.local.organize_local(payload.get("materials", []), payload.get("existing_pages", []), payload.get("purpose", "")))
         raise NotFoundError("Route does not exist.")
 
     @staticmethod
-    def response(status: int, value: Any) -> tuple[int, dict[str, str], bytes]:
-        return status, {"Content-Type": "application/json; charset=utf-8"}, json.dumps(value, ensure_ascii=False).encode("utf-8")
+    def response(status: int, value: Any, *, extra_headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], bytes]:
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+        headers.update(extra_headers or {})
+        return status, headers, json.dumps(value, ensure_ascii=False).encode("utf-8")
 
 
 class WikiRequestHandler(BaseHTTPRequestHandler):
@@ -308,6 +394,8 @@ class WikiRequestHandler(BaseHTTPRequestHandler):
     def _error(self, exc: Exception) -> tuple[int, dict[str, str], bytes]:
         if isinstance(exc, AuthError):
             return self.server.app.response(401, {"error": "unauthorized"})
+        if isinstance(exc, OAuthError):
+            return self.server.app.response(exc.status, {"error": exc.error, "error_description": exc.description}, extra_headers={"Cache-Control": "no-store"})
         if isinstance(exc, NotFoundError):
             return self.server.app.response(404, {"error": "not_found"})
         if isinstance(exc, ConflictError):

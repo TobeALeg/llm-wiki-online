@@ -88,7 +88,11 @@ class AuthStore:
                     token_hash TEXT PRIMARY KEY,
                     subject TEXT NOT NULL,
                     expires_at INTEGER NOT NULL,
-                    revoked_at INTEGER
+                    revoked_at INTEGER,
+                    credential_id TEXT,
+                    label TEXT NOT NULL DEFAULT '',
+                    token_kind TEXT NOT NULL DEFAULT 'pat',
+                    created_at INTEGER
                 );
                 CREATE TABLE IF NOT EXISTS webhook_events (
                     event_id TEXT PRIMARY KEY,
@@ -99,10 +103,27 @@ class AuthStore:
                 );
                 CREATE TABLE IF NOT EXISTS oauth_states (
                     state_hash TEXT PRIMARY KEY,
-                    expires_at INTEGER NOT NULL
+                    expires_at INTEGER NOT NULL,
+                    return_to TEXT NOT NULL DEFAULT '/'
                 );
                 """
             )
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(mcp_tokens)")}
+            for name, definition in (
+                ("credential_id", "TEXT"),
+                ("label", "TEXT NOT NULL DEFAULT ''"),
+                ("token_kind", "TEXT NOT NULL DEFAULT 'pat'"),
+                ("created_at", "INTEGER"),
+            ):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE mcp_tokens ADD COLUMN {name} {definition}")
+            db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_tokens_credential_id "
+                "ON mcp_tokens(credential_id) WHERE credential_id IS NOT NULL"
+            )
+            state_columns = {row["name"] for row in db.execute("PRAGMA table_info(oauth_states)")}
+            if "return_to" not in state_columns:
+                db.execute("ALTER TABLE oauth_states ADD COLUMN return_to TEXT NOT NULL DEFAULT '/'")
 
     def register_authorization_code(self, code: str, ttl_seconds: int = 300) -> None:
         if not code or len(code) > 512:
@@ -136,27 +157,28 @@ class AuthStore:
                 )
             db.commit()
 
-    def issue_state(self, ttl_seconds: int = 300) -> str:
+    def issue_state(self, ttl_seconds: int = 300, *, return_to: str = "/") -> str:
         state = secrets.token_urlsafe(32)
         with self._db() as db:
             db.execute(
-                "INSERT INTO oauth_states(state_hash, expires_at) VALUES (?, ?)",
-                (_hash(state), _now() + max(1, ttl_seconds)),
+                "INSERT INTO oauth_states(state_hash, expires_at, return_to) VALUES (?, ?, ?)",
+                (_hash(state), _now() + max(1, ttl_seconds), return_to),
             )
         return state
 
-    def consume_state(self, state: str) -> None:
+    def consume_state(self, state: str) -> str:
         state_hash = _hash(state)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT expires_at FROM oauth_states WHERE state_hash = ?",
+                "SELECT expires_at, return_to FROM oauth_states WHERE state_hash = ?",
                 (state_hash,),
             ).fetchone()
             if not row or row["expires_at"] < _now():
                 raise AuthError("OAuth state is invalid or expired.")
             db.execute("DELETE FROM oauth_states WHERE state_hash = ?", (state_hash,))
             db.commit()
+        return str(row["return_to"])
 
     def upsert_member(self, identity: dict[str, Any], *, sequence: int | None = None) -> dict[str, Any]:
         subject = _required_text(identity.get("subject", identity.get("sub")), "subject")
@@ -197,12 +219,27 @@ class AuthStore:
             db.execute("INSERT INTO sessions(token_hash, subject, expires_at) VALUES (?, ?, ?)", (_hash(token), subject, expires))
         return token, expires
 
-    def issue_mcp_token(self, subject: str, ttl_seconds: int) -> tuple[str, int]:
-        token = secrets.token_urlsafe(40)
+    def issue_mcp_token(
+        self,
+        subject: str,
+        ttl_seconds: int,
+        *,
+        label: str = "",
+        token_kind: str = "pat",
+    ) -> tuple[str, int, str]:
+        prefix = "lw_oauth_" if token_kind == "oauth" else "lw_pat_"
+        token = prefix + secrets.token_urlsafe(40)
+        credential_id = "cred_" + secrets.token_urlsafe(12)
         expires = _now() + max(1, ttl_seconds)
         with self._db() as db:
-            db.execute("INSERT INTO mcp_tokens(token_hash, subject, expires_at, revoked_at) VALUES (?, ?, ?, NULL)", (_hash(token), subject, expires))
-        return token, expires
+            db.execute(
+                """INSERT INTO mcp_tokens(
+                       token_hash, subject, expires_at, revoked_at,
+                       credential_id, label, token_kind, created_at
+                   ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?)""",
+                (_hash(token), subject, expires, credential_id, label[:120], token_kind, _now()),
+            )
+        return token, expires, credential_id
 
     def _subject_for_token(self, table: str, token: str) -> str | None:
         if table not in {"sessions", "mcp_tokens"}:
@@ -225,6 +262,26 @@ class AuthStore:
     def revoke_mcp_token(self, token: str) -> None:
         with self._db() as db:
             db.execute("UPDATE mcp_tokens SET revoked_at = ? WHERE token_hash = ?", (_now(), _hash(token)))
+
+    def credentials(self, subject: str) -> list[dict[str, Any]]:
+        with self._db() as db:
+            rows = db.execute(
+                """SELECT credential_id, label, token_kind, created_at, expires_at, revoked_at
+                   FROM mcp_tokens
+                   WHERE subject = ? AND credential_id IS NOT NULL AND token_kind = 'pat'
+                   ORDER BY created_at DESC""",
+                (subject,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def revoke_credential(self, subject: str, credential_id: str) -> bool:
+        with self._db() as db:
+            result = db.execute(
+                """UPDATE mcp_tokens SET revoked_at = ?
+                   WHERE subject = ? AND credential_id = ? AND revoked_at IS NULL""",
+                (_now(), subject, credential_id),
+            )
+        return result.rowcount == 1
 
     def apply_event(self, event_id: str, identity: dict[str, Any], sequence: int) -> str:
         event_id = _required_text(event_id, "event_id", 160)
@@ -404,10 +461,31 @@ class AuthService:
             raise AuthError("Session is invalid or expired.")
         return member
 
-    def issue_mcp_token(self, session_token: str) -> dict[str, Any]:
+    def issue_mcp_token(self, session_token: str, label: str = "Terminal") -> dict[str, Any]:
         member = self.authenticate_session(session_token)
-        token, expires = self.store.issue_mcp_token(member["subject"], self.mcp_ttl)
-        return {"access_token": token, "token_type": "Bearer", "expires_at": expires, "subject": member["subject"]}
+        return self.issue_mcp_token_for_subject(member["subject"], self.mcp_ttl, label=label, token_kind="pat")
+
+    def issue_mcp_token_for_subject(
+        self,
+        subject: str,
+        ttl_seconds: int,
+        *,
+        label: str,
+        token_kind: str,
+    ) -> dict[str, Any]:
+        member = self.store.member(subject)
+        if not member or not member["enabled"]:
+            raise AuthError("mentti member is disabled.")
+        token, expires, credential_id = self.store.issue_mcp_token(
+            subject, ttl_seconds, label=label, token_kind=token_kind
+        )
+        return {
+            "access_token": token,
+            "token_type": "Bearer",
+            "expires_at": expires,
+            "credential_id": credential_id,
+            "subject": subject,
+        }
 
     def authenticate_mcp_token(self, token: str) -> dict[str, Any]:
         subject = self.store.subject_for_mcp_token(token) if token else None
@@ -418,6 +496,14 @@ class AuthService:
 
     def revoke_mcp_token(self, token: str) -> None:
         self.store.revoke_mcp_token(token)
+
+    def list_credentials(self, session_token: str) -> list[dict[str, Any]]:
+        member = self.authenticate_session(session_token)
+        return self.store.credentials(member["subject"])
+
+    def revoke_credential(self, session_token: str, credential_id: str) -> bool:
+        member = self.authenticate_session(session_token)
+        return self.store.revoke_credential(member["subject"], credential_id)
 
     @staticmethod
     def verify_webhook(secret: str, body: bytes, signature: str, timestamp: str = "") -> bool:

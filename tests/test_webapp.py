@@ -223,8 +223,8 @@ class WebAppTests(unittest.TestCase):
         for expected in (
             "https://lw.app.mentti.work/mcp",
             "codex mcp add lw-company",
+            "codex mcp login lw-company",
             "--bearer-token-env-var LW_MCP_TOKEN",
-            "claude mcp add --transport http",
             "company_wiki_submit",
             "company_wiki_revoke_credential",
             "local_wiki_organize",
@@ -236,7 +236,6 @@ class WebAppTests(unittest.TestCase):
         # Tool failures are in-band; the browser API's 409/502 must not be
         # presented as MCP behaviour.
         self.assertIn("result.isError", text)
-        self.assertIn("page` 为 `null", text)
         self.assertNotIn("409 `conflict`", text)
 
         status, headers, alias = self.app.get("/readme", {"Cookie": f"lw_session={self.session}"})
@@ -249,13 +248,45 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(headers["Location"], "/auth/login")
         self.assertEqual(body, b"")
 
-    def test_readme_never_claims_oauth_discovery_or_leaks_a_credential(self):
+    def test_readme_describes_oauth_and_never_leaks_a_credential(self):
         _, _, body = self.app.get("/readme.md", {"Cookie": f"lw_session={self.session}"})
         text = body.decode("utf-8")
-        self.assertIn("不支持 MCP OAuth 自动发现", text)
+        self.assertIn("OAuth 2.1", text)
+        self.assertIn("/.well-known/oauth-protected-resource/mcp", text)
         # Only placeholders, never a usable session or bearer value.
         self.assertNotIn(self.session, text)
         self.assertNotIn("access_token\": \"e", text)
+
+    def test_oauth_metadata_is_public_and_key_page_is_session_protected(self):
+        status, _, body = self.app.get("/.well-known/oauth-protected-resource/mcp", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["resource"], "https://lw.app.mentti.work/mcp")
+        status, _, body = self.app.get("/.well-known/oauth-authorization-server", {})
+        self.assertEqual(status, 200)
+        self.assertIn("registration_endpoint", json.loads(body))
+
+        status, headers, _ = self.app.get("/mcp/setup", {})
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], "/auth/login")
+        status, _, body = self.app.get("/mcp/setup", {"Cookie": f"lw_session={self.session}"})
+        self.assertEqual(status, 200)
+        self.assertIn(b"Company MCP Key", body)
+
+    def test_personal_mcp_key_is_shown_once_and_can_be_revoked(self):
+        status, result = self.request("POST", "/api/mcp-token", {"label": "Laptop"})
+        self.assertEqual(status, 200)
+        self.assertTrue(result["access_token"].startswith("lw_pat_"))
+        self.assertEqual(self.auth.authenticate_mcp_token(result["access_token"])["subject"], "member-1")
+
+        status, _, body = self.app.get("/api/mcp-credentials", {"Cookie": f"lw_session={self.session}"})
+        credentials = json.loads(body)["credentials"]
+        self.assertEqual(credentials[0]["label"], "Laptop")
+        self.assertNotIn("access_token", credentials[0])
+        status, revoked = self.request("POST", "/api/mcp-credentials/revoke", {"credential_id": result["credential_id"]})
+        self.assertEqual(status, 200)
+        self.assertTrue(revoked["revoked"])
+        with self.assertRaises(AuthError):
+            self.auth.authenticate_mcp_token(result["access_token"])
 
 
 if __name__ == "__main__":

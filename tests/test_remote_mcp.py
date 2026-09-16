@@ -42,6 +42,8 @@ class RemoteMcpTests(unittest.TestCase):
         self.assertNotIn("subject", tool.parameters["properties"])
         self.assertEqual(tool.parameters["properties"], {})
         self.assertEqual(server.settings.streamable_http_path, "/mcp")
+        self.assertEqual(str(server.settings.auth.resource_server_url).rstrip("/"), "https://lw.app.mentti.work/mcp")
+        self.assertEqual(server.settings.auth.required_scopes, ["wiki:read", "wiki:write"])
 
     def test_company_factory_registers_shared_read_and_write_tools(self):
         with mock.patch.dict("os.environ", {"LLM_WIKI_DATABASE": str(Path(self.temporary.name) / "company.sqlite3")}, clear=False):
