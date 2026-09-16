@@ -16,6 +16,7 @@ from typing import Any
 
 from .auth import AuthError, AuthService
 from .model import ModelError
+from .remote_readme import readme_bytes
 from .remote_service import RemoteWikiService
 from .shared_service import SharedWikiService
 from .store import ConflictError, PageNotFoundError, StoreError
@@ -30,6 +31,10 @@ class NotFoundError(RuntimeError):
 # conventional and the original paths are served.
 CALLBACK_PATHS = {"/auth/callback", "/api/auth/sso/callback"}
 WEBHOOK_PATHS = {"/webhooks/menti/members", "/api/internal/menti/events"}
+
+# The MCP onboarding document is browsable next to the reader, so it follows the
+# reader's browser flow instead of the JSON 401 used by the fetch-based API.
+README_PATHS = {"/readme.md", "/readme"}
 
 
 def event_ordering(sequence: Any, occurred_at: Any) -> int:
@@ -66,6 +71,8 @@ READER_HTML = r"""<!doctype html>
     header { display: flex; gap: 24px; align-items: center; padding: 22px max(24px, calc((100vw - 1180px) / 2)); background: #1f332b; color: #f9f7ef; }
     header h1 { margin: 0; font: 600 24px/1.1 Georgia, serif; letter-spacing: .02em; }
     form { display: flex; flex: 1; max-width: 620px; gap: 8px; }
+    .readme { color: #f9f7ef; font-size: 14px; white-space: nowrap; opacity: .85; text-decoration: none; }
+    .readme:hover { opacity: 1; text-decoration: underline; }
     input { width: 100%; border: 1px solid #c9c9bd; border-radius: 999px; padding: 10px 16px; font: inherit; background: #fffef9; }
     button { border: 0; border-radius: 999px; padding: 10px 18px; background: #d4a94a; color: #1d241e; font-weight: 650; cursor: pointer; }
     main { display: grid; grid-template-columns: minmax(260px, 360px) 1fr; gap: 22px; max-width: 1180px; margin: 30px auto; padding: 0 24px; }
@@ -91,7 +98,7 @@ READER_HTML = r"""<!doctype html>
   </style>
 </head>
 <body>
-  <header><h1>LLM Wiki</h1><form id="search"><input name="q" aria-label="搜索 Wiki" autocomplete="off"><button>搜索</button></form></header>
+  <header><h1>LLM Wiki</h1><form id="search"><input name="q" aria-label="搜索 Wiki" autocomplete="off"><button>搜索</button></form><a class="readme" href="/readme.md">MCP 接入说明</a></header>
   <main><aside><h2>页面目录</h2><div id="list" class="page-list"><div class="state">正在读取…</div></div></aside><article id="detail"><div class="state">请选择一个页面。</div></article></main>
   <script>
     const list = document.getElementById('list');
@@ -214,7 +221,7 @@ class WikiWebApp:
             self.auth.store.consume_state(state)
             login = self.auth.login_with_code(query.get("code", [""])[0])
             return 302, {"Location": "/", "Set-Cookie": f"lw_session={login['session_token']}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={self.auth.session_ttl}"}, b""
-        if route == "/":
+        if route == "/" or route in README_PATHS:
             # A browser lands here straight from the Menti app directory, so an
             # anonymous visitor must be sent into the login flow. The JSON 401
             # below is only correct for the fetch-based API routes.
@@ -222,6 +229,8 @@ class WikiWebApp:
                 self._member(headers)
             except AuthError:
                 return 302, {"Location": "/auth/login"}, b""
+            if route in README_PATHS:
+                return 200, {"Content-Type": "text/markdown; charset=utf-8"}, readme_bytes()
             return 200, {"Content-Type": "text/html; charset=utf-8"}, READER_HTML.encode("utf-8")
         member = self._member(headers)
         if route == "/api/wiki/status":

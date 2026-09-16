@@ -214,6 +214,49 @@ class WebAppTests(unittest.TestCase):
         with self.assertRaises(NotFoundError):
             self.app.get("/api/wiki/pages/missing/versions", {"COOKIE": f"lw_session={self.session}"})
 
+    def test_readme_is_served_as_markdown_for_the_browser_flow(self):
+        status, headers, body = self.app.get("/readme.md", {"Cookie": f"lw_session={self.session}"})
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "text/markdown; charset=utf-8")
+        text = body.decode("utf-8")
+        # The document must describe the real endpoint and the real tool surface.
+        for expected in (
+            "https://lw.app.mentti.work/mcp",
+            "codex mcp add lw-company",
+            "--bearer-token-env-var LW_MCP_TOKEN",
+            "claude mcp add --transport http",
+            "company_wiki_submit",
+            "company_wiki_revoke_credential",
+            "local_wiki_organize",
+            "base_version",
+            "idempotency_key",
+        ):
+            self.assertIn(expected, text)
+
+        # Tool failures are in-band; the browser API's 409/502 must not be
+        # presented as MCP behaviour.
+        self.assertIn("result.isError", text)
+        self.assertIn("page` 为 `null", text)
+        self.assertNotIn("409 `conflict`", text)
+
+        status, headers, alias = self.app.get("/readme", {"Cookie": f"lw_session={self.session}"})
+        self.assertEqual(status, 200)
+        self.assertEqual(alias, body)
+
+    def test_readme_requires_login_like_the_reader(self):
+        status, headers, body = self.app.get("/readme.md", {})
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], "/auth/login")
+        self.assertEqual(body, b"")
+
+    def test_readme_never_claims_oauth_discovery_or_leaks_a_credential(self):
+        _, _, body = self.app.get("/readme.md", {"Cookie": f"lw_session={self.session}"})
+        text = body.decode("utf-8")
+        self.assertIn("不支持 MCP OAuth 自动发现", text)
+        # Only placeholders, never a usable session or bearer value.
+        self.assertNotIn(self.session, text)
+        self.assertNotIn("access_token\": \"e", text)
+
 
 if __name__ == "__main__":
     unittest.main()
