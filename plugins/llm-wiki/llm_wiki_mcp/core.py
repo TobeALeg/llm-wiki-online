@@ -146,10 +146,16 @@ def normalize_existing_pages(pages: Iterable[Any]) -> list[dict[str, Any]]:
             sources = [sources]
         if not isinstance(sources, list):
             raise CoreError(f"Existing page {slug} sources must be a list.")
+        aliases = page.get("aliases", [])
+        if isinstance(aliases, str):
+            aliases = [aliases]
+        if not isinstance(aliases, list):
+            raise CoreError(f"Existing page {slug} aliases must be a list.")
         result.append({
             "slug": slug,
             "content": content,
             "sources": sorted({_source_id(source) for source in sources}),
+            "aliases": sorted({_clean_string(alias, "alias", max_chars=120) for alias in aliases if str(alias).strip()}),
         })
     if sum(len(page["content"]) for page in result) > MAX_EXISTING_CHARS:
         raise CoreError(f"existing_pages exceed the {MAX_EXISTING_CHARS} character limit.")
@@ -182,6 +188,11 @@ def validate_page(page: Any, allowed_sources: set[str]) -> dict[str, Any]:
         tags = [tags]
     if not isinstance(tags, list):
         raise CoreError(f"Page {slug} tags must be a list.")
+    aliases = page.get("aliases", [])
+    if isinstance(aliases, str):
+        aliases = [aliases]
+    if not isinstance(aliases, list):
+        raise CoreError(f"Page {slug} aliases must be a list.")
     cleaned = {
         "slug": slug,
         "title": _clean_string(page.get("title"), "page title", max_chars=240),
@@ -191,6 +202,7 @@ def validate_page(page: Any, allowed_sources: set[str]) -> dict[str, Any]:
         "summary": _clean_string(page.get("summary"), "page summary", max_chars=4_000),
         "body": _clean_string(page.get("body"), "page body"),
         "sources": normalized_sources,
+        "aliases": sorted({_clean_string(alias, "alias", max_chars=120) for alias in aliases if str(alias).strip()}),
         "updated_at": now_iso(),
     }
     if not all(cleaned[key] for key in ("title", "summary", "body")):
