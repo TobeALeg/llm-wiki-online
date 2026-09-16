@@ -296,6 +296,42 @@ class InvalidModelOutputTests(WikiIngestTestCase):
         self.assertTrue(calls, "the retry asks the model again instead of replaying the bad draft")
         self.assertIsNone(wiki.load_run(self.root), "the run converges once the model behaves")
 
+    def test_a_deterministic_commit_failure_does_not_wedge_at_zero_requests(self):
+        """The run must keep asking the model, never spin on stored drafts with no request.
+
+        A publish step that fails every time (here, the atomic rename) must not leave the
+        run replaying its stored drafts: the retry has to go back to the model.
+        """
+
+        self.write("notes.md", "A decision.\n")
+        real_replace = Path.replace
+
+        def failing_replace(self, target, *args, **kwargs):
+            if str(target).endswith("delivery-plan.md"):
+                raise OSError(28, "No space left on device")
+            return real_replace(self, target, *args, **kwargs)
+
+        calls = []
+        with mock.patch.object(wiki, "call_model", side_effect=answering_model(calls)):
+            with mock.patch.object(Path, "replace", failing_replace):
+                with self.assertRaises(OSError):
+                    wiki.do_update(self.root, args())
+        self.assertGreater(len(calls), 0, "the first attempt does reach the model")
+
+        retry = []
+        with mock.patch.object(wiki, "call_model", side_effect=answering_model(retry)):
+            with mock.patch.object(Path, "replace", failing_replace):
+                with self.assertRaises(OSError):
+                    wiki.do_update(self.root, args())
+
+        self.assertTrue(
+            retry,
+            "the retry must ask the model again; zero requests here is the wedge",
+        )
+        recorded = wiki.load_run(self.root)
+        self.assertIsNotNone(recorded)
+        self.assertEqual(recorded["drafted_pages"], [], "unusable drafts are not kept")
+
     def test_a_non_object_model_response_raises_a_wiki_error(self):
         """The check lives inside call_model, so it needs a real HTTP response to exercise."""
 
@@ -313,7 +349,8 @@ class InvalidModelOutputTests(WikiIngestTestCase):
         self.assertIn("object", str(caught.exception).lower())
 
     def test_a_failed_page_write_leaves_no_page_on_disk(self):
-        """A partial multi-page commit must not leave an uncataloged page behind."""
+        """A partial multi-page commit must not leave an uncataloged page behind, and the
+        next attempt must ask the model again rather than replay the unusable drafts."""
 
         self.write("a.md", "First decision.\n")
         self.write("b.md", "Second decision.\n")
@@ -345,6 +382,14 @@ class InvalidModelOutputTests(WikiIngestTestCase):
         self.assertEqual(
             list(self.pages_dir.glob("*.md")), [], "a half-written commit publishes nothing"
         )
+
+        # The unusable drafts are gone, so a healthy retry redoes the model work.
+        retry = []
+        with mock.patch.object(wiki, "call_model", side_effect=two_pages):
+            wiki.do_update(self.root, args())
+        self.assertEqual(wiki.load_state(self.root)["files"]["a.md"]["status"], "complete")
+        self.assertEqual(len(list(self.pages_dir.glob("*.md"))), 2, "both pages land")
+        self.assertIsNone(wiki.load_run(self.root))
 
     def test_a_batch_that_fails_validation_is_not_recorded_as_done(self):
         self.write("notes.md", long_document(paragraphs=20))

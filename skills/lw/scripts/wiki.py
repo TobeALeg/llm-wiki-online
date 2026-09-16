@@ -495,6 +495,22 @@ def commit_run(root: Path, run: dict[str, Any]) -> None:
         manifest.unlink(missing_ok=True)
 
 
+def discard_run(root: Path, run: dict[str, Any]) -> None:
+    """Abandon a run whose prepared work could not be committed.
+
+    The prepared pages are unusable as they stand, so keeping them would let every
+    later retry skip the model and fail on the same drafts. Dropping them, and the
+    chunk progress that produced them, makes the next attempt ask the model again
+    from the current source content.
+    """
+
+    for unit in run.get("units", []):
+        unit["done"] = False
+    run["drafted_pages"] = []
+    run["abandoned_sources"] = []
+    save_run(root, run)
+
+
 def prepare_batches(run: dict[str, Any], budget: int) -> list[list[dict[str, Any]]]:
     batches: list[list[dict[str, Any]]] = []
     current: list[dict[str, Any]] = []
@@ -866,7 +882,11 @@ def do_update(root: Path, args: argparse.Namespace) -> None:
             notes.append(note)
         if update.get("_provider"):
             provider = update["_provider"]
-    changed = commit_update(root, state, run, records, drafts, episodes, notes, provider)
+    try:
+        changed = commit_update(root, state, run, records, drafts, episodes, notes, provider)
+    except Exception:
+        discard_run(root, run)
+        raise
     print(f"Updated {len(changed)} page(s): {', '.join(changed) or 'none'}")
 
 

@@ -41,3 +41,5 @@ ts	phase	decision	why	evidence	result
 2026-09-16T12:00:00Z	fix	让校验真正成为提交的前置条件：加 MAX_PAGE_SLUG_CHARS 上限（与共享存储的校验器一致），页面先写临时文件、全部成功后再统一 rename，call_model 对非对象响应直接报 WikiError	只要通过校验与写入成功之间还有缝隙，这族卡死就会继续出现；堵住缝隙而不是再补一个点	tests/test_lw_ingest.py:InvalidModelOutputTests 五条	绿
 2026-09-16T12:10:00Z	review	变异验证发现我自己两条测试是因错误原因通过的：slug 测试用了不合法的伪来源 ID（先被未知来源拒绝），非对象测试 mock 掉了 call_model 因而根本不执行新检查	先怀疑观测方法；一个因错误原因变绿的测试等于没有测试	重写两条测试后，回退各自修复都会变红	已修正，三条修复均变异验证
 2026-09-16T12:15:00Z	fix	原子写入第一版用同名临时文件，跨批次同 slug 时第二次 rename 找不到源文件；改为按 slug 去重（保留最后一次）并使用唯一临时名	我自己引入的回归，被既有测试当场抓住——这正是先写测试的价值	全量 134 测试绿	绿
+2026-09-16T12:30:00Z	fix	不再逐点补漏，而是消除整族缺陷的前提：提交失败时 discard_run 丢弃不可用的草稿并把块进度重置，使下一次重试必然重新请求模型	五轮验证各找到新入口，说明只要	manifest	能存下无法提交的东西就会卡死这个前提才是根因；不能穷举所有提交失败方式，但能让运行无法被已存草稿劫持
+tests/test_lw_ingest.py:test_a_deterministic_commit_failure_does_not_wedge_at_zero_requests	绿，回退即红，135 测试				
