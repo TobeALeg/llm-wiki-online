@@ -9,7 +9,7 @@ Remote MCP ──────────────┤
                          ├─ reusable WikiCore (validate/organize)
 Browser API ─────────────┘
                                   │
-                          AuthService + Menti adapter
+                          AuthService + mentti adapter
                                   │
                           SharedWikiStore (SQLite)
                                   │
@@ -40,7 +40,7 @@ rules are not inferred by lw and remain an explicit operational concern.
 ### company mode
 
 ```text
-Menti identity → AuthService → MCP/browser request
+mentti identity → AuthService → MCP/browser request
                                   ↓
                     snapshot + model organization
                                   ↓
@@ -57,7 +57,7 @@ server filesystem path.
 ## status flow
 
 ```text
-Menti member:     unknown → enabled → disabled
+mentti member:     unknown → enabled → disabled
                                   ↑         │
                                   └─ newer authoritative reconciliation
 

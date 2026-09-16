@@ -1,4 +1,4 @@
-"""Menti identity exchange and short-lived lw credentials."""
+"""mentti identity exchange and short-lived lw credentials."""
 
 from __future__ import annotations
 
@@ -35,12 +35,12 @@ def _hash(value: str) -> str:
 def _required_text(value: Any, field: str, maximum: int = 240) -> str:
     result = str(value or "").strip()
     if not result or len(result) > maximum or any(ord(char) < 32 for char in result):
-        raise AuthError(f"Menti identity field {field} is invalid.")
+        raise AuthError(f"mentti identity field {field} is invalid.")
     return result
 
 
 class AuthStore:
-    """Small durable auth store containing no passwords or Menti session data."""
+    """Small durable auth store containing no passwords or mentti session data."""
 
     def __init__(self, database: str | Path):
         self.database = Path(database)
@@ -309,7 +309,7 @@ class AuthStore:
 
 
 class MentiIdentityProvider:
-    """Adapter for Menti's existing authorization-code exchange endpoint."""
+    """Adapter for mentti's existing authorization-code exchange endpoint."""
 
     def __init__(self, exchange_url: str | None = None):
         self.exchange_url = exchange_url or os.environ.get("MENTI_AUTH_CODE_URL", "").strip()
@@ -320,8 +320,8 @@ class MentiIdentityProvider:
         client_id = os.environ.get("MENTI_CLIENT_ID", "")
         client_secret = os.environ.get("MENTI_CLIENT_SECRET", "")
         if not client_id or not client_secret:
-            raise AuthError("Menti application credentials are not configured.")
-        # Menti's exchange endpoint parses the request body as JSON, not form data.
+            raise AuthError("mentti application credentials are not configured.")
+        # mentti's exchange endpoint parses the request body as JSON, not form data.
         payload = json.dumps({
             "grant_type": "authorization_code",
             "code": code,
@@ -334,9 +334,9 @@ class MentiIdentityProvider:
             with urllib.request.urlopen(request, timeout=10) as response:
                 value = json.loads(response.read(64 * 1024).decode("utf-8"))
         except Exception as exc:  # provider details must not be exposed to clients
-            raise AuthError("Menti identity exchange failed.") from exc
+            raise AuthError("mentti identity exchange failed.") from exc
         if not isinstance(value, dict):
-            raise AuthError("Menti identity response is invalid.")
+            raise AuthError("mentti identity response is invalid.")
         nested = value.get("member") if isinstance(value.get("member"), dict) else value.get("user") if isinstance(value.get("user"), dict) else value
         identity = {
             "subject": nested.get("subject", nested.get("sub")),
@@ -348,7 +348,7 @@ class MentiIdentityProvider:
         return identity
 
     def list_members(self) -> list[dict[str, Any]]:
-        """Fetch the authoritative member list through the configured Menti app endpoint."""
+        """Fetch the authoritative member list through the configured mentti app endpoint."""
 
         endpoint = os.environ.get("MENTI_MEMBERS_URL", "").strip()
         if not endpoint:
@@ -356,17 +356,17 @@ class MentiIdentityProvider:
         client_id = os.environ.get("MENTI_CLIENT_ID", "")
         client_secret = os.environ.get("MENTI_CLIENT_SECRET", "")
         if not client_id or not client_secret:
-            raise AuthError("Menti application credentials are not configured.")
+            raise AuthError("mentti application credentials are not configured.")
         credentials = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
         request = urllib.request.Request(endpoint, headers={"Authorization": f"Basic {credentials}"}, method="GET")
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 value = json.loads(response.read(256 * 1024).decode("utf-8"))
         except Exception as exc:
-            raise AuthError("Menti member reconciliation failed.") from exc
+            raise AuthError("mentti member reconciliation failed.") from exc
         members = value.get("members") if isinstance(value, dict) else value
         if not isinstance(members, list):
-            raise AuthError("Menti member reconciliation response is invalid.")
+            raise AuthError("mentti member reconciliation response is invalid.")
         return [{
             "subject": item.get("subject", item.get("sub")),
             "email": item.get("email", ""),
@@ -390,10 +390,10 @@ class AuthService:
         subject = _required_text(identity.get("subject", identity.get("sub")), "subject")
         existing = self.store.member(subject)
         if existing and not existing["enabled"]:
-            raise AuthError("Menti member is disabled.")
+            raise AuthError("mentti member is disabled.")
         member = self.store.upsert_member(identity)
         if not member.get("enabled"):
-            raise AuthError("Menti member is disabled.")
+            raise AuthError("mentti member is disabled.")
         token, expires = self.store.issue_session(member["subject"], self.session_ttl)
         return {"session_token": token, "expires_at": expires, "member": member}
 
@@ -426,7 +426,7 @@ class AuthService:
         if signature.startswith("sha256="):
             expected = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
             return hmac.compare_digest(expected, signature)
-        # Menti signs `"{timestamp}.{body}"` and prefixes the digest with `v1=`.
+        # mentti signs `"{timestamp}.{body}"` and prefixes the digest with `v1=`.
         if signature.startswith("v1=") and timestamp:
             signed = f"{timestamp}.".encode("utf-8") + body
             expected = "v1=" + hmac.new(secret.encode("utf-8"), signed, hashlib.sha256).hexdigest()

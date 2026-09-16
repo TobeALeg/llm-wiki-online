@@ -16,7 +16,7 @@ MCP 服务。内容对应服务端实际实现；如与客户端界面不一致�
 | 入口 | 地址 | 用途 |
 | --- | --- | --- |
 | 远程 MCP | `https://lw.app.mentti.work/mcp` | 供 Agent 调用，需要 Bearer 凭证 |
-| 浏览器阅读 | `https://lw.app.mentti.work/` | Menti 登录后只读浏览，不提供写入 |
+| 浏览器阅读 | `https://lw.app.mentti.work/` | mentti 登录后只读浏览，不提供写入 |
 | 健康检查 | `https://lw.app.mentti.work/healthz` | 无需登录，只返回 storage/identity/model 状态 |
 
 传输方式为 MCP Streamable HTTP，无状态、返回 JSON（非 SSE）。凭证使用 Bearer，不是
@@ -24,8 +24,8 @@ OAuth 授权码流程 —— 见下文「已知限制」。
 
 ## 前提
 
-- 拥有**已启用**的 Menti 成员身份。被停用的成员即使持有未过期凭证也会被立即拒绝。
-- 浏览器能完成一次 Menti 登录，用于取得凭证。
+- 拥有**已启用**的 mentti 成员身份。被停用的成员即使持有未过期凭证也会被立即拒绝。
+- 浏览器能完成一次 mentti 登录，用于取得凭证。
 - 只能访问公司共享 Wiki 这一份存储；接口不接受调用方指定的服务器路径，也不提供
   个人知识空间。
 
@@ -34,7 +34,7 @@ OAuth 授权码流程 —— 见下文「已知限制」。
 目前没有在网页上提供一键复制按钮，需要手动取一次 `lw_session` 会话 Cookie，再用它
 换取长期凭证。两个步骤都只在本机执行，不要把结果写进仓库或共享文档。
 
-1. 用浏览器打开 `https://lw.app.mentti.work/` 完成 Menti 登录。
+1. 用浏览器打开 `https://lw.app.mentti.work/` 完成 mentti 登录。
 2. 打开开发者工具 → Application/存储 → Cookies → `https://lw.app.mentti.work`，
    复制 `lw_session` 的值。该 Cookie 是 HttpOnly，只能用这种方式读取。
 3. 用会话 Cookie 换取 MCP 凭证：
@@ -65,7 +65,7 @@ export LW_MCP_TOKEN='粘贴 access_token 的值'
 注意事项：
 
 - **有效期 30 天**。过期后重复上面步骤重新签发。
-- 凭证与 Menti 成员身份绑定，接口没有任何 `subject`/`email`/`name` 参数可以覆盖身份。
+- 凭证与 mentti 成员身份绑定，接口没有任何 `subject`/`email`/`name` 参数可以覆盖身份。
 - 泄露或怀疑泄露时，调用 `company_wiki_revoke_credential` 立即吊销；停用成员后服务端
   也会直接拒绝其旧凭证。
 - 会话 Cookie 本身 8 小时过期，只在换取凭证时用到。

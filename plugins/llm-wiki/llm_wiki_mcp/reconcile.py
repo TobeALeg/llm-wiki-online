@@ -1,4 +1,4 @@
-"""Startup and periodic reconciliation of the Menti member directory."""
+"""Startup and periodic reconciliation of the mentti member directory."""
 
 from __future__ import annotations
 

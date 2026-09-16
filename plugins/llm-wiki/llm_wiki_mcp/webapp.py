@@ -26,7 +26,7 @@ class NotFoundError(RuntimeError):
     pass
 
 
-# Menti's app directory generates its callback and webhook addresses from the app
+# mentti's app directory generates its callback and webhook addresses from the app
 # URL using a fixed convention and does not allow custom paths, so both the
 # conventional and the original paths are served.
 CALLBACK_PATHS = {"/auth/callback", "/api/auth/sso/callback"}
@@ -38,9 +38,9 @@ README_PATHS = {"/readme.md", "/readme"}
 
 
 def event_ordering(sequence: Any, occurred_at: Any) -> int:
-    """Order member events, falling back to Menti's `occurred_at` millisecond clock.
+    """Order member events, falling back to mentti's `occurred_at` millisecond clock.
 
-    Menti sends no numeric sequence, so a shared default would mark every event
+    mentti sends no numeric sequence, so a shared default would mark every event
     after the first as stale and freeze member state.
     """
 
@@ -206,10 +206,10 @@ class WikiWebApp:
         if route == "/auth/login":
             authorize = os.environ.get("MENTI_AUTHORIZE_URL", "").strip()
             if not authorize:
-                raise StoreError("Menti login is not configured.")
+                raise StoreError("mentti login is not configured.")
             state = self.auth.store.issue_state()
             query = urllib.parse.urlencode({"response_type": "code", "client_id": os.environ.get("MENTI_CLIENT_ID", ""), "redirect_uri": os.environ.get("MENTI_REDIRECT_URI", ""), "state": state})
-            # Path=/ because Menti's registered callback lives under /api/auth/...,
+            # Path=/ because mentti's registered callback lives under /api/auth/...,
             # so a narrower path would not be sent back on the callback request.
             return 302, {"Location": authorize + ("&" if "?" in authorize else "?") + query, "Set-Cookie": f"lw_oauth_state={state}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=300"}, b""
         if route in CALLBACK_PATHS:
@@ -222,7 +222,7 @@ class WikiWebApp:
             login = self.auth.login_with_code(query.get("code", [""])[0])
             return 302, {"Location": "/", "Set-Cookie": f"lw_session={login['session_token']}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={self.auth.session_ttl}"}, b""
         if route == "/" or route in README_PATHS:
-            # A browser lands here straight from the Menti app directory, so an
+            # A browser lands here straight from the mentti app directory, so an
             # anonymous visitor must be sent into the login flow. The JSON 401
             # below is only correct for the fetch-based API routes.
             try:

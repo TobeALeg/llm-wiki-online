@@ -106,7 +106,7 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("lw_session=", headers["Set-Cookie"])
 
     def test_menti_conventional_callback_path_is_served(self):
-        """Menti's app directory fixes the callback at /api/auth/sso/callback."""
+        """mentti's app directory fixes the callback at /api/auth/sso/callback."""
 
         class Provider:
             def exchange_code(self, code):

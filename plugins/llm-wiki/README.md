@@ -62,7 +62,7 @@ The endpoint is `http://127.0.0.1:4310/mcp`. It intentionally binds to loopback 
 
 ## Run the protected company service
 
-Set `LLM_WIKI_REMOTE=true`, `LLM_WIKI_DATABASE` and the Menti/model variables from
+Set `LLM_WIKI_REMOTE=true`, `LLM_WIKI_DATABASE` and the mentti/model variables from
 `.env.production.example`, then start the two entry points:
 
 ```bash
@@ -71,7 +71,7 @@ llm-wiki-mcp --transport streamable-http --host 127.0.0.1 --port 4310
 ```
 
 The browser API and `/mcp` share one SQLite database. The first login uses the
-Menti authorization-code callback; an authenticated member then obtains a short-
+mentti authorization-code callback; an authenticated member then obtains a short-
 lived, revocable MCP Bearer credential from `/api/mcp-token`. No subject or email
 argument can override its identity.
 
