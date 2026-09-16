@@ -7,7 +7,9 @@ import hmac
 import os
 import re
 import threading
+import time
 import urllib.parse
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -21,6 +23,27 @@ from .store import ConflictError, PageNotFoundError, StoreError
 
 class NotFoundError(RuntimeError):
     pass
+
+
+def event_ordering(sequence: Any, occurred_at: Any) -> int:
+    """Order member events, falling back to Menti's `occurred_at` millisecond clock.
+
+    Menti sends no numeric sequence, so a shared default would mark every event
+    after the first as stale and freeze member state.
+    """
+
+    if isinstance(sequence, int) and not isinstance(sequence, bool) and sequence >= 0:
+        return sequence
+    if isinstance(occurred_at, str) and occurred_at:
+        try:
+            parsed = datetime.fromisoformat(occurred_at.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return int(parsed.timestamp() * 1000)
+    return int(time.time() * 1000)
 
 
 READER_HTML = r"""<!doctype html>
@@ -212,11 +235,19 @@ class WikiWebApp:
     def post(self, path: str, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, str], bytes]:
         if path == "/webhooks/menti/members":
             secret = os.environ.get("MENTI_WEBHOOK_SECRET", "")
-            if not AuthService.verify_webhook(secret, body, self._header(headers, "X-Menti-Signature")):
+            if not AuthService.verify_webhook(
+                secret,
+                body,
+                self._header(headers, "X-Menti-Signature"),
+                self._header(headers, "X-Menti-Timestamp"),
+            ):
                 raise AuthError("Webhook signature is invalid.")
-            payload = self._json(body)
-            event = payload
-            result = self.auth.apply_member_webhook(event.get("event_id", ""), event.get("member", event), int(event.get("sequence", 0)))
+            event = self._json(body)
+            event_id = str(event.get("event_id") or self._header(headers, "X-Menti-Event-Id"))
+            member = event.get("member", event)
+            result = self.auth.apply_member_webhook(
+                event_id, member, event_ordering(event.get("sequence"), event.get("occurred_at"))
+            )
             return self.response(200, {"status": result})
         member = self._member(headers)
         payload = self._json(body)

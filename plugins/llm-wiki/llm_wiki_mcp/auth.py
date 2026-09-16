@@ -10,7 +10,6 @@ import os
 import secrets
 import sqlite3
 import time
-import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
@@ -322,14 +321,15 @@ class MentiIdentityProvider:
         client_secret = os.environ.get("MENTI_CLIENT_SECRET", "")
         if not client_id or not client_secret:
             raise AuthError("Menti application credentials are not configured.")
-        form = urllib.parse.urlencode({
+        # Menti's exchange endpoint parses the request body as JSON, not form data.
+        payload = json.dumps({
             "grant_type": "authorization_code",
             "code": code,
             "client_id": client_id,
             "client_secret": client_secret,
             "redirect_uri": os.environ.get("MENTI_REDIRECT_URI", ""),
-        }).encode("utf-8")
-        request = urllib.request.Request(self.exchange_url, data=form, headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+        }, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(self.exchange_url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 value = json.loads(response.read(64 * 1024).decode("utf-8"))
@@ -420,11 +420,18 @@ class AuthService:
         self.store.revoke_mcp_token(token)
 
     @staticmethod
-    def verify_webhook(secret: str, body: bytes, signature: str) -> bool:
-        if not secret or not signature.startswith("sha256="):
+    def verify_webhook(secret: str, body: bytes, signature: str, timestamp: str = "") -> bool:
+        if not secret or not signature:
             return False
-        expected = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(expected, signature)
+        if signature.startswith("sha256="):
+            expected = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+            return hmac.compare_digest(expected, signature)
+        # Menti signs `"{timestamp}.{body}"` and prefixes the digest with `v1=`.
+        if signature.startswith("v1=") and timestamp:
+            signed = f"{timestamp}.".encode("utf-8") + body
+            expected = "v1=" + hmac.new(secret.encode("utf-8"), signed, hashlib.sha256).hexdigest()
+            return hmac.compare_digest(expected, signature)
+        return False
 
     def apply_member_webhook(self, event_id: str, identity: dict[str, Any], sequence: int) -> str:
         return self.store.apply_event(event_id, identity, sequence)

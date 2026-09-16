@@ -120,6 +120,36 @@ class WebAppTests(unittest.TestCase):
         with self.assertRaises(AuthError):
             self.auth.authenticate_mcp_token(token)
 
+    def test_menti_style_webhook_signature_orders_by_occurred_at(self):
+        from llm_wiki_mcp.webapp import event_ordering
+
+        self.assertEqual(event_ordering(7, None), 7)
+        self.assertEqual(event_ordering(0, None), 0)
+        self.assertEqual(event_ordering(None, "2026-08-20T07:43:21.756Z"), 1787211801756)
+        self.assertGreater(event_ordering(None, None), 0)
+
+        payload = {
+            "event_id": "evt_menti_1",
+            "event_type": "member.deactivated",
+            "occurred_at": "2026-08-20T07:43:21.756Z",
+            "member": {"subject": "member-1", "display_name": "Former", "active": False},
+        }
+        body = json.dumps(payload).encode()
+        timestamp = "1787202201"
+        signature = "v1=" + hmac.new(
+            b"webhook-secret", f"{timestamp}.".encode() + body, hashlib.sha256
+        ).hexdigest()
+        with mock.patch.dict("os.environ", {"MENTI_WEBHOOK_SECRET": "webhook-secret"}, clear=False):
+            status, result = self.request(
+                "POST",
+                "/webhooks/menti/members",
+                payload,
+                headers={"Cookie": "", "X-Menti-Signature": signature, "X-Menti-Timestamp": timestamp},
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "applied")
+        self.assertFalse(self.auth_store.member("member-1")["enabled"])
+
     def test_headers_are_case_insensitive_and_missing_versions_are_not_found(self):
         status, _, _ = self.app.get("/api/wiki/status", {"authorization": f"Bearer {self.auth.issue_mcp_token(self.session)['access_token']}"})
         self.assertEqual(status, 200)

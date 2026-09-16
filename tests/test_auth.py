@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).parents[1]
@@ -85,6 +86,43 @@ class AuthTests(unittest.TestCase):
         with self.assertRaises(AuthError):
             self.store.reconcile([{"subject": "menti-6", "enabled": True}, {"subject": ""}])
         self.assertIsNone(self.store.member("menti-6"))
+
+
+    def test_menti_exchange_posts_a_json_body_and_maps_display_name(self):
+        import json as json_module
+        from llm_wiki_mcp.auth import MentiIdentityProvider
+
+        captured = {}
+
+        class Response:
+            def read(self, _limit=None):
+                return json_module.dumps(
+                    {"sub": "menti-9", "subject": "menti-9", "email": "a@b.c", "display_name": "Dandi"}
+                ).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            captured["content_type"] = request.get_header("Content-type")
+            captured["body"] = json_module.loads(request.data.decode())
+            return Response()
+
+        with mock.patch.dict("os.environ", {
+            "MENTI_CLIENT_ID": "lw",
+            "MENTI_CLIENT_SECRET": "mhs_secret",
+            "MENTI_REDIRECT_URI": "https://lw.app.mentti.work/auth/callback",
+        }, clear=False), mock.patch("urllib.request.urlopen", fake_urlopen):
+            identity = MentiIdentityProvider("https://mentti.work/api/sso/token").exchange_code("code-1")
+
+        self.assertEqual(captured["content_type"], "application/json")
+        self.assertEqual(captured["body"]["code"], "code-1")
+        self.assertEqual(captured["body"]["grant_type"], "authorization_code")
+        self.assertEqual(identity["subject"], "menti-9")
+        self.assertEqual(identity["name"], "Dandi")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import urllib.parse
 from collections.abc import Callable
 from typing import Any
 
@@ -9,9 +10,27 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl
 
 from .auth import AuthService
+
+
+def _allowed_hosts(issuer_url: str) -> list[str]:
+    """Hosts FastMCP may accept, since it runs behind a reverse proxy.
+
+    FastMCP enables DNS-rebinding protection when it is constructed with a
+    loopback host, which only permits loopback `Host` values. The shared Wiki is
+    reached through nginx under its public hostname, so that hostname has to be
+    allowed explicitly or every remote MCP request fails with 421.
+    """
+
+    hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    parsed = urllib.parse.urlsplit(issuer_url)
+    if parsed.hostname:
+        netloc = parsed.hostname if parsed.port is None else f"{parsed.hostname}:{parsed.port}"
+        hosts.append(netloc)
+    return hosts
 
 
 class SubjectBoundTokenVerifier:
@@ -79,6 +98,10 @@ def create_remote_mcp(
         stateless_http=True,
         json_response=True,
         streamable_http_path="/mcp",
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=_allowed_hosts(issuer_url),
+        ),
     )
 
     @server.tool(

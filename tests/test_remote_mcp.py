@@ -49,6 +49,19 @@ class RemoteMcpTests(unittest.TestCase):
         names = set(server._tool_manager._tools)
         self.assertTrue({"company_wiki_status", "company_wiki_search", "company_wiki_page", "company_wiki_submit", "company_wiki_versions", "company_wiki_restore", "local_wiki_organize", "company_wiki_revoke_credential"} <= names)
 
+    def test_public_hostname_is_allowed_behind_the_reverse_proxy(self):
+        from llm_wiki_mcp.remote_mcp import _allowed_hosts
+
+        hosts = _allowed_hosts("https://lw.app.mentti.work")
+        self.assertIn("lw.app.mentti.work", hosts)
+        self.assertIn("127.0.0.1:*", hosts)
+
+        server = create_remote_mcp(self.auth, lambda subject: {"subject": subject}, issuer_url="https://lw.app.mentti.work")
+        allowed = server.settings.transport_security.allowed_hosts
+        self.assertIn("lw.app.mentti.work", allowed)
+        self.assertTrue(server.settings.transport_security.enable_dns_rebinding_protection)
+        self.assertNotIn("*", allowed)
+
     def test_local_mcp_tool_has_no_storage_callback(self):
         calls = []
         server = create_remote_mcp(self.auth, lambda subject: {"subject": subject}, organize_local=lambda materials, pages, purpose: calls.append((materials, pages, purpose)) or {"pages": []})
