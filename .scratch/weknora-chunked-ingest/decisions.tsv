@@ -1,0 +1,47 @@
+ts	phase	decision	why	evidence	result
+2026-09-16T08:20:00Z	frame	把范围限定在设计文档的 A、B 两个阶段：修掉误记完成，并加上结构分块；C 至 F 阶段（解析器、引用、主题路由、冲突）明确不在范围内	只做 A 阶段只能止住"谎报完成"，止不住截断；A+B 才是"长文档覆盖为真"成立的最小切片	docs/weknora-llm-wiki-integration.md:59-118, :333-342	已定验证断言，C 至 F 阶段挂起
+2026-09-16T08:21:00Z	frame	定义完成：30k 字符文件末尾的事实能进入模型；超过请求预算的文件集能分批完成且未处理部分仍然可见；中途失败绝不把来源标记完成，且重试既不漏块也不重复块	三条可证伪的断言，每一条都在真实 CLI 上以子进程验证，而不是对着一个辅助函数	tests/test_lw_ingest_e2e.py	已记录基线
+2026-09-16T08:22:00Z	harness	动手之前先跑既有测试，记录为 64 个全绿	后面每一次检查都要能读成"旧值对比新值"	python3 -m unittest discover -s tests	64 通过 0 失败
+2026-09-16T08:30:00Z	harness	先写测试并确认它们是红的	失败的测试就是规格；它也证明测试套件不可能碰巧通过	tests/test_lw_chunking.py, tests/test_lw_ingest.py, tests/test_lw_ingest_e2e.py, tests/test_skill_distribution_parity.py	收集到 31 个，4 失败 23 报错，红
+2026-09-16T08:33:00Z	design	分块器放在新的 skills/lw/scripts/chunking.py，而不是继续往 wiki.py 里塞	wiki.py 已是 583 行的脚本，且本身在插件里还有一份副本；独立纯模块让偏移逻辑不必依赖一个 wiki 目录就能测	docs/weknora-llm-wiki-integration.md:303-306	模块边界已定
+2026-09-16T08:34:00Z	design	把块表示为偏移加上文本再加上一个 verbatim 标记，heading_path 存成元组放在文本之外、绝不插进文本	设计文档提醒过把标题路径插进正文会移动偏移；该标记是让重复的表头和围栏变诚实、而不是变成静默偏移谎言的关键	docs/weknora-llm-wiki-integration.md:84, tests/test_lw_chunking.py:38-46	结构已冻结
+2026-09-16T08:35:00Z	design	让 planner 成为"该摄取什么"的唯一真相来源：每个来源一条记录，带 chunks_total 与 chunks_done，state.json 的文件记录由它派生	原缺陷在于 apply_update 不管提交了什么就把全部记录的哈希写回，于是有两处在回答"什么算完成了"；现在只有一个决策点	skills/lw/scripts/wiki.py:334 派生到 tracked_files	结构已冻结
+2026-09-16T08:36:00Z	design	把可恢复的工作建模为 .llm-wiki/runs/ 下的磁盘 run manifest，带逐块 done 标记，只在整轮提交后才删除	设计文档要求一份可重放的待办清单；manifest 让重试路径变成重新加载而不是重新实现，文档里的 wiki_ingest_runs/wiki_ingest_results 表是在线等价物	docs/weknora-llm-wiki-integration.md:88-109, :291	结构已冻结
+2026-09-16T08:37:00Z	design	没有采用设计文档提出的 wiki_source_revisions / wiki_parses / wiki_chunks 三张 SQLite 表	这是本地 CLI，存储是 state.json 与 Markdown，A、B 两阶段完全不触及 SharedWikiStore；文档把这三张表列给在线的 D 至 F 阶段	plugins/llm-wiki/llm_wiki_mcp/store.py:93-190, docs/weknora-llm-wiki-integration.md:280-297	判断，范围守在 A+B
+2026-09-16T08:38:00Z	design	保留 v1 state.json 可读并就地升级，把此前记录的每个文件标记为 unverified 并给出原因	旧哈希可能是按被截断或跳过之后的内容算出来的，沿用它就等于保留正在修的缺陷；重新摄取一次是安全方向，因为重复一次比丢一个事实便宜	tests/test_lw_ingest.py:StateMigrationTests	判断，迁移姿态已定
+2026-09-16T08:39:00Z	risk	发现 skills/lw 与 plugins/llm-wiki/skills/lw 是两份靠手改维护的副本，且没有任何东西检查它们是否一致；而运行中的 MCP 执行的是插件那份	只改一份的修复会静默地不生效，或者只对一半调用者生效	plugins/llm-wiki/llm_wiki_mcp/service.py:31-40, tests/test_skill_distribution_parity.py	已加一致性测试，并确立单一写入者规则
+2026-09-16T08:40:00Z	delegation	把分块器交给子代理，接口冻结、文件范围限定在那一个新模块；测试、镜像同步、wiki.py 集成和全部提交都由我自己做	机械性工作获得评审分离，共享文件保持单一写入者，两份副本就不会互相抢写	skills/lw/scripts/chunking.py	已派发
+2026-09-16T09:22:00Z	unit-1	分块器以 51c61a3 提交，且是 amend 过的：第一次提交把两份副本记成了一行之差	我的提交和子代理的重构抢跑，把一个只存在于其中一份的死字段记了进去；两份副本在 HEAD 上不一致，恰好否掉一致性测试的全部意义	commit 51c61a3，两个 blob 内容一致	20 个门禁测试绿，一致性绿
+2026-09-16T09:23:00Z	unit-1	删掉 _Block.fence 这个未使用字段及其死赋值，两份副本都删，而不是保留子代理的版本	该字段被赋值但从未被读取；删掉它是更小也更诚实的产物，同时消除了两份副本当初分叉的原因	skills/lw/scripts/chunking.py，各 507 行	门禁绿，23 个测试
+2026-09-16T09:24:00Z	unit-1	对分块门禁做变异验证：去掉末尾 flush、去掉硬上限、去掉表头，各自都能让它变红	一个不可能失败的测试不是门禁；我需要知道它真的在观察它声称的行为	tests/test_lw_chunking.py	M1 34 个失败，M2 37 个，M3 6 个；恢复后绿
+2026-09-16T09:25:00Z	unit-1	增加一个带种子的 60 例模糊测试，覆盖随机的标题、围栏、表格、段落文档	手写的样例覆盖不到偏移 bug 藏身的边界形状；这个模糊测试立刻抓出了我自己的一个不精确辅助函数	tests/test_lw_chunking.py:FuzzTests	60 个子测试绿
+2026-09-16T09:34:00Z	unit-3	wiki.py 围绕"分块、分批、提交"的流水线重写；旧的 apply_update 与 source_bundle 被删除	缺陷就住在 apply_update 里，它不管提交了什么就给全部记录写哈希；把它留在新路径旁边，等于留下两个对"什么算完成"的答案	commit d01a2fc, git diff main...HEAD --stat	115 个测试绿
+2026-09-16T09:35:00Z	review	阅读子代理 diff 时发现：一次重试复用了块完成标记，却丢弃了前面批次产出的页面	子代理自己的测试通过，是因为它验证的是块被复用；没有人验证过存活下来的块所贡献的知识最终进了页面	tests/test_lw_ingest.py:ResumeEvidenceTests，修复前为红	已复现、已修、已做变异验证
+2026-09-16T09:36:00Z	review	否决了子代理在 HTTP 请求体顶层加 evidence 字段的做法，改为让测试桩读取提示词	它为了让测试更好抓取，在每次请求上复制了一整份材料负载，这是没有产品理由的真实 API 成本	tests/test_lw_ingest_e2e.py:prompt_payload	传输未变，e2e 绿
+2026-09-16T09:36:30Z	review	回退了子代理把 .log 加进可摄取扩展名的改动，并把自己的样例改用 .md	扩大 Wiki 摄取范围是本次请求没有要求的产品变更；应当让测试跟随产品，而不是让产品迁就测试	skills/lw/scripts/wiki.py TEXT_EXTENSIONS	扩展名列表回到原有集合
+2026-09-16T09:37:00Z	review	让 plan_ingest、create_run、commit_run 都不带未使用参数，并删掉在剪枝存在之后变得多余的逐块漂移检查	签名里的未使用参数是签名对函数体做出的、函数体并不兑现的承诺	commit d01a2fc；git show d01a2fc:skills/lw/scripts/wiki.py 显示这三个函数都没有 root/state 参数	已无未使用参数（AST 检查干净）
+2026-09-16T09:38:00Z	review	跑了注释评审，采纳它三条可执行发现中的两条，其余逐条给出保留理由	它想删掉测试的 docstring 和 material_budget 的单位说明；前者在陈述每个测试的意图，后者定义了一个公开单位，而它关于 manifest 键名和魔法数字的发现是对的	commit e8ece02	采纳 2 条，其余按实质保留
+2026-09-16T09:40:00Z	verify	在 HEAD 的干净 worktree 上跑完整测试套件，不含任何未跟踪文件	本地树能通过，可能是因为有些文件从未被提交	git worktree add /tmp/lw-verify HEAD	仅凭已跟踪状态即有 115 个测试通过
+2026-09-16T09:41:00Z	review	对本次决策日志与 diff 做交叉模型评审；它通过实际运行代码发现：被删除的来源会把之后每次重试都卡死，以及两个 manifest 时解析结果任意	评审者的脚本复现了这两点，而没有任何已提交的测试做到过	tests/test_lw_ingest.py:FailureAndResumeTests，修复前为红	两点均复现
+2026-09-16T09:50:00Z	fix	来源放弃剪枝：字节已变的来源，其未完成的块被丢弃，使本轮收敛，并让该来源在下一轮重新规划	一个不可用的运行不能变成永久的死结；靠重试收敛正是 manifest 存在的目的	tests/test_lw_ingest.py:test_a_source_edited_during_a_run_is_abandoned_and_the_run_still_finishes	绿，已做变异验证
+2026-09-16T09:51:00Z	fix	load_run 改取最新的 manifest 而不是 sorted()[0]；v1 升级时写出 state.v1.json，并对损坏记录抛 WikiError	崩溃留下两个 manifest 时不能静默重放较旧的那个；就地重写需要留一份可比对的副本	tests/test_lw_ingest.py:FailureAndResumeTests, StateMigrationTests	绿，已做变异验证
+2026-09-16T09:52:00Z	fix	update 现在也打印 status 所打印的被跳过文件行	设计文档要求被跳过的文件必须带原因出现，而用户实际执行的是 update	commit 89b7eb2，已在真实 CLI 上验证	绿
+2026-09-16T09:53:00Z	verify	在真实 CLI 上以子进程核对定义完成的三条断言，并补上评审指出的两处 e2e 覆盖缺口	定义完成点名了这三条，所以要在发布产物上验证而不是对着辅助函数；其中 30k 边界与"未完成部分可见"两条此前断言不足	tests/test_lw_ingest_e2e.py, 5 个测试通过	VERIFIED
+2026-09-16T10:10:00Z	verify	Shipping：合并前按 playbook 要求独立验证，forge 为 gh（仓库无 origin CLI），base 就是 trunk tip	CI 绿不等于结论；需要一个没写过这份代码的验证者在真实 CLI 上对比 parent 与 head	gh pr view 11, 三个 check 全 SUCCESS 但 deploy SKIPPED	已派发独立验证者
+2026-09-16T10:20:00Z	verify	第一个独立验证者给 PASS+NOTES，但真实复现出一个缺陷：中途失败留下草稿后，编辑未完成的来源会让此后每次 update 都因草稿引用旧 source_id 而被拒，manifest 永不收敛	这正是我在文档里声称不会卡死的性质，被证伪	验证者在 PR 上贴出复现步骤与 stderr	已复现，修复
+2026-09-16T10:30:00Z	fix	放弃来源时把它的 source_id 记入 run[abandoned_sources]，提交时并入允许集合；草稿引用的是模型当时真正读到的修订（设计文档第 8 节：源文删除不证明事实为假）	丢掉已经花过模型调用换来的页面是错的；保留该修订的引用才是目的	tests/test_lw_ingest.py:test_an_abandoned_source_still_lets_the_drafted_page_commit	绿，回退即红
+2026-09-16T10:30:30Z	fix	分块器：超过上限的标题行此前直接成为超限块，改为按字符切分	验证者指出的次要瑕疵，违反硬上限不变量	tests/test_lw_chunking.py:test_an_oversized_heading_line_is_still_capped	绿
+2026-09-16T10:45:00Z	verify	patch 变了（86a3d16 → b57e349），按 playbook 第 3 步重新验证；第二个验证者 PASS+NOTES，确认旧 head 失败、新 head 收敛	verdict 绑定 SHA，改一行也要重验	PR #11 评论，旧 head exit 1 / 新 head exit 0	VERIFIED
+2026-09-16T10:50:00Z	fix	commit_run 改为清掉该项目的全部 manifest，强制单一开放运行不变量	验证者指出两个 manifest 时落选的那个永久残留，导致此后每次 update 重发已完成的块；一行修复	tests/test_lw_ingest.py:test_committing_a_run_clears_every_manifest	绿，回退即红
+2026-09-16T11:00:00Z	verify	第三个验证者给 FAIL，发现 update --episode 在没有待处理块时静默丢弃 episode 却记入 processed_episodes；main 上会投递，属我引入的回归	这正是独立门禁的价值：本地 124 个测试全绿，这条路径无覆盖	验证者给出 0 请求 / main 1 请求的对比	已复现，修复
+2026-09-16T11:05:00Z	fix	do_update 的空批次跳过改为仅在没有待投递 episode 时才跳过	根因是我修来源漂移时加的 if not batch: continue 把投递 episode 的空批次也跳过了；只有当批次为空且无 episode 才能跳过	tests/test_lw_ingest.py:EpisodeDeliveryTests 三条 + e2e 两条	绿，回退即红
+2026-09-16T11:20:00Z	verify	第四个验证者给 PASS+NOTES，又发现同族缺陷：模型返回的页面在提交时校验失败，manifest 留下且全部块已标记完成，重试 0 请求、重复校验同一份坏草稿、永久卡死；main 上健康重试即可收敛	第四个卡死类缺陷；各自打补丁说明前提有问题	验证者给出 0 请求 / manifest 18/18 done / 2 个 drafted_pages 的证据	已复现，转攻前提
+2026-09-16T11:35:00Z	fix	攻击前提而非再打一个补丁：草稿在写入 manifest 之前就校验，校验不通过的批次不算完成、不存草稿。允许集合的构造抽成 run_source_ids，批次内与最终提交共用	只要 manifest 里能存下永远无法提交的东西，这一族卡死缺陷就会不断产生；让这个前提不成立才是根治	tests/test_lw_ingest.py:InvalidModelOutputTests；回退修复后 done 标记又出现	绿，回退即红，131 测试
+2026-09-16T11:50:00Z	verify	第五个验证者再给 FAIL，指出 d6c50b9 把校验提前了却没有让提交写入原子化：253 字符的 slug 能过校验、写文件时才因文件名过长失败，且逐页写入会留下已写未登记的半提交	同族第五例；验证者一句话点出结构弱点——通过校验不等于提交必成功	验证者给出 253 字符 slug、5 次 update、0 请求、manifest 不清的证据	已复现，转攻前提
+2026-09-16T12:00:00Z	fix	让校验真正成为提交的前置条件：加 MAX_PAGE_SLUG_CHARS 上限（与共享存储的校验器一致），页面先写临时文件、全部成功后再统一 rename，call_model 对非对象响应直接报 WikiError	只要通过校验与写入成功之间还有缝隙，这族卡死就会继续出现；堵住缝隙而不是再补一个点	tests/test_lw_ingest.py:InvalidModelOutputTests 五条	绿
+2026-09-16T12:10:00Z	review	变异验证发现我自己两条测试是因错误原因通过的：slug 测试用了不合法的伪来源 ID（先被未知来源拒绝），非对象测试 mock 掉了 call_model 因而根本不执行新检查	先怀疑观测方法；一个因错误原因变绿的测试等于没有测试	重写两条测试后，回退各自修复都会变红	已修正，三条修复均变异验证
+2026-09-16T12:15:00Z	fix	原子写入第一版用同名临时文件，跨批次同 slug 时第二次 rename 找不到源文件；改为按 slug 去重（保留最后一次）并使用唯一临时名	我自己引入的回归，被既有测试当场抓住——这正是先写测试的价值	全量 134 测试绿	绿
+2026-09-16T12:30:00Z	fix	不再逐点补漏，而是消除整族缺陷的前提：提交失败时 discard_run 丢弃不可用的草稿并把块进度重置，使下一次重试必然重新请求模型	五轮验证各找到新入口，说明只要	manifest	能存下无法提交的东西就会卡死这个前提才是根因；不能穷举所有提交失败方式，但能让运行无法被已存草稿劫持
+tests/test_lw_ingest.py:test_a_deterministic_commit_failure_does_not_wedge_at_zero_requests	绿，回退即红，135 测试				
+2026-09-16T13:00:00Z	verify	第六个验证者给 PASS+NOTES：五个历史场景全部确认修复，隔离对比确认结构性修复有效，且在正常运行路径（模型输出、来源编辑、崩溃、磁盘满、只读目录）下找不到任何 0 请求卡死	这是我一直在找的结论：该族缺陷的可行入口已被封死，而不只是堵了六个点	验证者表格：5/5 历史场景在旧 head 卡死、在新 head 收敛	VERIFIED
+2026-09-16T13:10:00Z	fix	manifest 被外部损坏（非法 JSON、缺 units、类型错误）时不再抛未捕获异常：load_run 校验形状，不合格的移到 .broken 并继续下一次规划	验证者点名这是残留的最后一个 0 请求卡死，且属本次引入的接口面；.broken 后缀不会被下次 glob 读取，保留供排查	tests/test_lw_ingest.py:test_an_unreadable_manifest_is_set_aside_and_the_next_run_proceeds	绿，回退即红，136 测试

@@ -24,7 +24,7 @@ Do not imply that the plugin automatically reads every ChatGPT conversation. It 
 
 - `/lw` or `/lw update`: initialize the wiki if needed, summarize durable facts from the relevant current conversation, and call `update_wiki` with that episode.
 - `/lw init`: call `initialize_wiki` without invoking the external model.
-- `/lw status`: call `wiki_status` to show pending project files, episodes, page count, and last update.
+- `/lw status`: call `wiki_status` to show pending project files, episodes, page count, last update, and any unfinished ingest run.
 - `/lw ask <query>`: call `query_wiki` and answer from the returned pages.
 - `/lw scan`: call `scan_wiki` to show file changes without calling the model.
 - `/lw lint`: call `lint_wiki` to validate Wiki consistency.
@@ -38,6 +38,12 @@ Do not imply that the plugin automatically reads every ChatGPT conversation. It 
 5. Summarize only relevant conversation context into an episode. Include decisions, rationale, constraints, facts, unresolved questions, and explicit corrections. Exclude hidden reasoning, credentials, and unrelated chat.
 6. Update with `python <skill-root>/scripts/wiki.py update --root <project-root> --episode-file <episode.json>`. For a short note, use `--episode "..."`.
 7. Run `lint` after an update. Report generated or changed pages and warnings.
+
+## Long documents and interrupted updates
+
+`update` no longer truncates a file at an excerpt boundary: it chunks each new or changed source and sends every chunk in order, batching them so the chunk material for one request stays within the material budget. A source over the 128 KiB scan limit is still skipped as a whole file and is not ingested; `update` and `status` both print it with that reason. A file is only marked processed after its pages are committed, so an update that stops part way leaves the rest to be done next time.
+
+When `update` fails part way through, it leaves a run manifest in `.llm-wiki/runs/`. Running `update` again resumes at the first unfinished chunk and reuses what already succeeded, so leave the directory in place. If a source changes while a run is open, its unfinished chunks are dropped from that run and it is planned again from its new content; `status` reports the unfinished run and the reason any file was skipped. Upgrading an older wiki rewrites `state.json` once and leaves the previous file at `.llm-wiki/state.v1.json`.
 
 ## Episode JSON
 
