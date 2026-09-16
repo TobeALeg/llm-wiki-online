@@ -1,54 +1,54 @@
-# Chunked ingest for the local LLM Wiki (doc phases A + B)
+# 本地 LLM Wiki 的按块摄取（设计文档第 A、B 阶段）
 
-Status: ready-for-human
+状态：ready-for-human
 
-## Why
+## 问题
 
-`skills/lw/scripts/wiki.py` had two defects that compounded.
+`skills/lw/scripts/wiki.py` 里有两个互相叠加的缺陷。
 
-`eligible_files()` skipped any file over 128 KiB with no output, and `source_bundle()` sent only the first 24,000 characters of each file. Neither was reported. Facts near the end of a long document therefore never reached the model.
+`eligible_files()` 会跳过任何超过 128 KiB 的文件，且没有任何输出；`source_bundle()` 每个文件只发送前 24,000 字符。两者都不报告，因此长文档结尾的事实永远进不了模型。
 
-Worse, `apply_update()` wrote a hash for every scanned file back into `state.json`, including the ones it had skipped and the ones it had only half-sent. The next run compared hashes, saw no change, and treated those files as done. The untransmitted remainder was permanently lost.
+更严重的是 `apply_update()` 把**每一个**扫描到的文件的哈希写回 `state.json`，包括被跳过的和只发送了一半的。下一轮比较哈希，看不出变化，就把这些文件当成已处理；未发送的剩余内容从此永久丢失。
 
-The upstream design doc is `docs/weknora-llm-wiki-integration.md`. This change implements its section 4 (P0) and section 5's chunker boundary, and stops there.
+上游设计文档是 `docs/weknora-llm-wiki-integration.md`。本次实现它的第 4 节（P0）以及第 5 节的分块边界，到此为止。
 
-## What changed
+## 改了什么
 
-**A structure-aware chunker.** `skills/lw/scripts/chunking.py` splits a document by ATX heading, fenced code block, table, and paragraph, then by sentence, then by character as a last resort. Every chunk carries `start`/`end` offsets into the original text and the heading path in effect. A chunk whose `text` is not literally `original[start:end]` (an oversized table piece repeats its header, an oversized fence reopens its fence) says so with `verbatim=False`, so the offsets stay honest.
+**一个结构感知的分块器。** `skills/lw/scripts/chunking.py` 依次按 ATX 标题、代码围栏、表格、段落切分，再按句子，最后按字符。每个块带原文的 `start`/`end` 偏移和生效的标题路径。若某块的 `text` 不等于 `original[start:end]`（超长表格块重复了表头，超长代码块重建了围栏），它以 `verbatim=False` 标明，偏移因此仍然诚实。
 
-**Ingest is chunk-based and resumable.** `update` plans the new and changed sources, writes a run manifest under `.llm-wiki/runs/`, sends the chunks in batches that fit `material_budget()`, and records each completed batch. The manifest is deleted only after the pages, the page metadata, and the per-file completion records are committed together. A source is marked `complete` only when all of its chunks were processed and the update landed.
+**摄取改为按块且可恢复。** `update` 规划新增与变化的来源，在 `.llm-wiki/runs/` 下写一份 run manifest，按 `material_budget()` 分批发送块，并记录每个完成的批次。只有当页面、页面元数据和按文件的完成记录一并提交之后，manifest 才被删除。一个来源只有在它的全部块都处理完且更新已落地时才标记为 `complete`。
 
-**A retry converges.** On failure the manifest survives. Re-running `update` reloads it, reuses the chunks that already succeeded (including the pages those batches produced), and sends only the remainder. A source whose bytes changed while the run was open has its unfinished chunks dropped from that run and is planned again from its new content, so a moved or deleted file cannot wedge every future retry.
+**重试会收敛。** 失败时 manifest 保留。再次运行 `update` 会重新加载它，复用已成功的块（包括那些批次产出的页面），只发送剩余部分。若某来源的字节在运行期间被修改，它在本次运行中未完成的块会被丢弃，并在下一轮按新内容重新规划，因此被移动或删除的文件不会把之后每一次重试都卡死。
 
-**Skips are visible.** `update` and `status` both print each unreadable or oversized file with its reason.
+**跳过是可见的。** `update` 与 `status` 都会为每个不可读或超大的文件打印路径和原因。
 
-**`state.json` is v1-compatible.** A v1 file is upgraded once, on first read, with its old records marked `unverified` so they are re-ingested against current content. The previous file is kept at `.llm-wiki/state.v1.json`.
+**`state.json` 兼容 v1。** v1 文件在首次读取时升级一次，旧记录标记为 `unverified`，以便按当前内容重新摄取。原文件保留在 `.llm-wiki/state.v1.json`。
 
-**The two skill copies cannot drift.** `skills/lw/` and `plugins/llm-wiki/skills/lw/` are hand-edited duplicates, and the packaged MCP executes the plugin copy. `tests/test_skill_distribution_parity.py` fails if any shipped file differs.
+**两份技能副本不会再漂移。** `skills/lw/` 与 `plugins/llm-wiki/skills/lw/` 是靠手改维护的重复副本，而打包后的 MCP 执行的是插件那一份。`tests/test_skill_distribution_parity.py` 在任何一份发布文件不一致时失败。
 
-## Deliberately not done
+## 明确不做
 
-Phases C to F of the doc: document parsers (PDF/Word/OCR), persisted chunk citations on pages, topic routing to replace the whole-library prompt, and the explicit conflict/supersede protocol. The local CLI's stores are `state.json` and Markdown, so the doc's proposed `wiki_source_revisions` / `wiki_parses` / `wiki_chunks` SQLite tables were not added; they belong with the online phases that touch `SharedWikiStore`.
+设计文档第 C 至 F 阶段：文档解析器（PDF/Word/OCR）、页面上持久化的块引用、用以替代整库提示词的主题路由，以及显式的冲突／替代协议。本地 CLI 的存储是 `state.json` 与 Markdown，因此文档提出的 `wiki_source_revisions` / `wiki_parses` / `wiki_chunks` 三张 SQLite 表没有新增；它们属于会触及 `SharedWikiStore` 的在线阶段。
 
-Two doc section 4 items remain open, both noted here rather than silently dropped:
+设计文档第 4 节还有两项待办，在此写明而非默不作声地丢掉：
 
-- The request budget counts chunk text only. A page-heavy wiki still sends all existing and drafted pages in full, so "one request stays within budget" holds for the material, not the whole request.
-- `parse_id` is computed but not persisted anywhere after a run commits, so the doc's "an old citation still reaches its old parse snapshot" is not yet achievable. It needs the citation store from phase D.
+- 请求预算只统计块正文。页面较多的 Wiki 仍会整份发送已有页面和已起草页面，所以"单个请求不超预算"对材料成立，对整次调用不成立。
+- `parse_id` 有计算，但在一次运行提交之后没有持久化到任何地方，因此文档所说"旧引用仍能回到旧解析快照"目前无法做到。它需要第 D 阶段的引用存储。
 
-## Verification
+## 验证
 
-`python3 -m unittest discover -s tests` runs 121 tests, all passing, including from a clean checkout.
+`python3 -m unittest discover -s tests` 运行 121 个测试，全部通过，且在干净检出下同样通过。
 
-The three falsifiable claims of the definition of done are checked against the real CLI as a subprocess against a stub model server, in `tests/test_lw_ingest_e2e.py`:
+定义完成的三条可验证断言，都是在真实 CLI 上以子进程方式对接桩模型服务验证的，见 `tests/test_lw_ingest_e2e.py`：
 
-1. A document longer than 24,000 characters has its tail fact reach the model.
-2. A source set larger than the request budget completes across batches, with the unfinished part still visible in `status` after a mid-run failure.
-3. A mid-run failure commits no page and marks no source complete; the retry resends neither a finished chunk nor duplicates a page.
+1. 超过 24,000 字符的文档，其末尾事实能进入模型。
+2. 总量超过请求预算的文件集能分批完成，中途失败后 `status` 仍显示未完成的部分。
+3. 中途失败不提交任何页面、不把任何来源标记完成；重试既不重发已完成的块，也不产生重复页面。
 
-Every corrective fix in this change was mutation-checked: reverting the fix turns a specific test red.
+本次每一处修复都做了变异验证：把修复回退会让某个具体测试变红。
 
-The decision trail is `decisions.tsv` in this directory, one row per decision with its evidence.
+决策日志是本目录下的 `decisions.tsv`，每个决策一行，附证据。
 
-## Review notes
+## 评审记录
 
-Two defects were found by reading the delegate diff rather than by its tests: a retry discarded the pages earlier batches had produced, and the HTTP body carried a duplicate copy of the whole material payload. Both fixed. A later cross-model review reproduced two further failures by running the code: a deleted source wedging every retry, and two manifests resolving arbitrarily. Both fixed and covered.
+靠阅读子代理的 diff 而非其测试发现了两处缺陷：一次重试丢弃了前面批次产出的页面，以及 HTTP 请求体携带了一整份重复的材料副本。两者均已修复。之后一次交叉模型评审通过**实际运行代码**又复现出两个失败：被删除的来源把每次重试都卡死，以及两个 manifest 时解析结果任意。两者均已修复并有覆盖。
