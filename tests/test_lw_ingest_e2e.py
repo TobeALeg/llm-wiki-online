@@ -84,7 +84,11 @@ class StubModel:
                     return
                 stub.answered.append(body)
                 prompt = body["messages"][-1]["content"]
-                sources = sorted(set(SOURCE_ID.findall(prompt)))
+                sources = set(SOURCE_ID.findall(prompt))
+                # An episode is cited by its own id, which reaches the model as a record.
+                for episode in collect(prompt_payload(body) or {}, "id"):
+                    sources.add(f"episode:{episode}")
+                sources = sorted(sources)
                 pages = []
                 if sources:
                     pages.append(
@@ -189,6 +193,37 @@ class IngestEndToEndTests(unittest.TestCase):
             for record in self.state()["files"].values()
             for chunk_id in record["chunks_done"]
         ]
+
+    def test_an_episode_with_no_pending_source_is_still_delivered(self):
+        """Found by review: an episode-only update returned success without calling the model."""
+
+        stub = StubModel()
+        self.addCleanup(stub.stop)
+
+        result = self.run_cli(stub, "--episode", "The team chose SQLite for the index.")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(stub.answered), 1, "the episode must reach the model")
+        sent = json.dumps(stub.answered, ensure_ascii=False)
+        self.assertIn("The team chose SQLite for the index.", sent)
+        self.assertEqual(len(self.state()["processed_episodes"]), 1)
+        self.assertEqual(self.page_names(), ["delivery-plan.md"])
+
+    def test_a_later_episode_after_every_source_is_complete_is_still_delivered(self):
+        self.write_documents(1)
+        first = StubModel()
+        self.addCleanup(first.stop)
+        self.assertEqual(self.run_cli(first).returncode, 0)
+        before = len(first.answered)
+
+        second = StubModel()
+        self.addCleanup(second.stop)
+        result = self.run_cli(second, "--episode", "A later decision to record.")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(first.answered), before, "the first stub sees no new traffic")
+        self.assertEqual(len(second.answered), 1, "the episode must reach the model")
+        self.assertIn("A later decision to record.", json.dumps(second.answered, ensure_ascii=False))
 
     def test_the_tail_of_a_long_document_reaches_the_model(self):
         self.write_documents(1)

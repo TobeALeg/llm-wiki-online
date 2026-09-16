@@ -551,6 +551,52 @@ class IdleRunTests(WikiIngestTestCase):
         self.assertIn("deferred", rendered)
 
 
+class EpisodeDeliveryTests(WikiIngestTestCase):
+    """An episode must reach the model, or not be recorded as processed.
+
+    A run with no pending chunks still has to deliver pending episodes. Skipping
+    that call records the episode as processed without sending it anywhere, which
+    loses the knowledge silently and permanently.
+    """
+
+    def test_an_episode_alone_is_delivered(self):
+        calls = []
+        with mock.patch.object(wiki, "call_model", side_effect=answering_model(calls)) as model:
+            wiki.do_update(self.root, args(episode="The team chose SQLite."))
+
+        self.assertTrue(calls, "the episode must reach the model")
+        self.assertEqual(len(model.call_args_list), 1)
+        state = wiki.load_state(self.root)
+        self.assertEqual(len(state["processed_episodes"]), 1, "only delivered episodes are recorded")
+
+    def test_an_episode_after_every_source_is_complete_is_still_delivered(self):
+        self.write("notes.md", "A decision.\n")
+        first = []
+        with mock.patch.object(wiki, "call_model", side_effect=answering_model(first)):
+            wiki.do_update(self.root, args())
+        self.assertEqual(len(first), 1)
+
+        second = []
+        with mock.patch.object(wiki, "call_model", side_effect=answering_model(second)) as model:
+            wiki.do_update(self.root, args(episode="A later decision."))
+
+        self.assertEqual(len(model.call_args_list), 1, "the second episode must be delivered")
+        self.assertTrue(second, "the episode must reach the model")
+        episodes_in_payload = [
+            item for payload in second for item in payload.get("episodes", [])
+        ]
+        self.assertTrue(episodes_in_payload, "the payload must carry the pending episode")
+
+    def test_an_episode_is_not_recorded_when_the_model_call_fails(self):
+        with mock.patch.object(wiki, "call_model", side_effect=wiki.WikiError("model unavailable")):
+            with self.assertRaises(wiki.WikiError):
+                wiki.do_update(self.root, args(episode="Never delivered."))
+
+        state = wiki.load_state(self.root)
+        self.assertEqual(state["processed_episodes"], [], "an undelivered episode stays pending")
+        self.assertEqual(len(wiki.pending_episodes(self.root, state)), 1)
+
+
 class ResumeEvidenceTests(WikiIngestTestCase):
     """A retry must reuse the knowledge the first attempt already extracted.
 

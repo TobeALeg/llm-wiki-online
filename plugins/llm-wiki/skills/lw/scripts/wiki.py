@@ -809,7 +809,10 @@ def do_update(root: Path, args: argparse.Namespace) -> None:
             save_run(root, run)
             for path in drifted:
                 print(f"skipped {path}: changed while the run was open; it will be planned again")
-        if not batch:
+        if not batch and not episodes:
+            # A batch that pruning emptied has nothing to send, and no episode needs
+            # delivering. An empty batch WITH pending episodes must still be sent, or the
+            # episode would be recorded as processed without ever reaching the model.
             continue
         update = call_model(batch_payload(root, run, batch, diff, episodes), purpose, list(pages_by_slug.values()))
         if not isinstance(update, dict):
