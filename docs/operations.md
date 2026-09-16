@@ -21,6 +21,10 @@ GitHub issue 或提交记录。
 4. 检查 `/healthz`、登录回调、两个 `/.well-known/` OAuth 元数据、PKCE 授权码与
    refresh token 轮换、`/connect` 个人 Key，以及远程 `/mcp` 的真实调用。
 
+仓库的 `.github/workflows/deploy.yml` 在 Pull Request 和推送到 `main` 时自动运行完整测试；
+只有 `main` 会继续执行生产部署。生产部署所需的五个 `LW_DEPLOY_*` secrets 缺失时，
+部署工作流会失败而不是静默跳过。`workflow_dispatch` 仍保留作手动重试入口。
+
 Compose 将 web 和 mcp 仅绑定到宿主机回环地址 8000/4310，宿主机 Nginx 使用这两个
 地址转发；它们不会直接暴露到公网。若使用 GitHub Actions 部署，还需配置
 `LW_DEPLOY_HOST`、`LW_DEPLOY_USER`、`LW_DEPLOY_PATH`、`LW_DEPLOY_SSH_KEY` 和

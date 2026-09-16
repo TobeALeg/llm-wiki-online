@@ -1,6 +1,10 @@
 name: Deploy LLM Wiki
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -25,21 +29,27 @@ jobs:
     steps:
       - id: check
         env:
+          EVENT_NAME: ${{ github.event_name }}
           DEPLOY_HOST: ${{ secrets.LW_DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.LW_DEPLOY_USER }}
           DEPLOY_PATH: ${{ secrets.LW_DEPLOY_PATH }}
           DEPLOY_KEY: ${{ secrets.LW_DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.LW_DEPLOY_KNOWN_HOSTS }}
         run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$DEPLOY_KEY" ] && [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Production deploy secrets are incomplete." >&2
+            exit 1
           fi
 
   deploy:
     needs: [verify, deploy_config]
-    if: ${{ needs.deploy_config.outputs.ready == 'true' }}
+    if: ${{ github.event_name != 'pull_request' && needs.deploy_config.outputs.ready == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
