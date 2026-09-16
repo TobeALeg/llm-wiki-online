@@ -105,6 +105,50 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(status, 302)
         self.assertIn("lw_session=", headers["Set-Cookie"])
 
+    def test_menti_conventional_callback_path_is_served(self):
+        """Menti's app directory fixes the callback at /api/auth/sso/callback."""
+
+        class Provider:
+            def exchange_code(self, code):
+                return {"subject": "member-conventional", "enabled": True}
+
+        self.auth.provider = Provider()
+        with mock.patch.dict("os.environ", {
+            "MENTI_AUTHORIZE_URL": "https://mentti.work/sso/authorize",
+            "MENTI_CLIENT_ID": "lw",
+            "MENTI_REDIRECT_URI": "https://lw.app.mentti.work/api/auth/sso/callback",
+        }, clear=False):
+            status, headers, _ = self.app.get("/auth/login", {})
+            self.assertEqual(status, 302)
+            self.assertIn("redirect_uri=https%3A%2F%2Flw.app.mentti.work%2Fapi%2Fauth%2Fsso%2Fcallback", headers["Location"])
+            # The state cookie must survive being sent to the /api/auth/... path.
+            self.assertIn("Path=/;", headers["Set-Cookie"])
+            self.assertNotIn("Path=/auth;", headers["Set-Cookie"])
+
+        state = headers["Set-Cookie"].split(";", 1)[0]
+        self.auth_store.register_authorization_code("conventional-code")
+        status, headers, _ = self.app.get(
+            f"/api/auth/sso/callback?code=conventional-code&state={state.split('=', 1)[1]}",
+            {"Cookie": state},
+        )
+        self.assertEqual(status, 302)
+        self.assertIn("lw_session=", headers["Set-Cookie"])
+
+    def test_menti_conventional_webhook_path_is_served(self):
+        payload = {"event_id": "evt-conventional", "event_type": "member.updated",
+                   "occurred_at": "2026-09-16T05:00:00.000Z",
+                   "member": {"subject": "member-1", "active": True}}
+        body = json.dumps(payload).encode()
+        timestamp = "1789534800"
+        signature = "v1=" + hmac.new(b"webhook-secret", f"{timestamp}.".encode() + body, hashlib.sha256).hexdigest()
+        with mock.patch.dict("os.environ", {"MENTI_WEBHOOK_SECRET": "webhook-secret"}, clear=False):
+            status, result = self.request(
+                "POST", "/api/internal/menti/events", payload,
+                headers={"Cookie": "", "X-Menti-Signature": signature, "X-Menti-Timestamp": timestamp},
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "applied")
+
     def test_signed_disable_webhook_invalidates_existing_credentials(self):
         login = self.auth_store.issue_session("member-1", 3600)[0]
         token = self.auth.issue_mcp_token(login)["access_token"]

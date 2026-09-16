@@ -25,6 +25,13 @@ class NotFoundError(RuntimeError):
     pass
 
 
+# Menti's app directory generates its callback and webhook addresses from the app
+# URL using a fixed convention and does not allow custom paths, so both the
+# conventional and the original paths are served.
+CALLBACK_PATHS = {"/auth/callback", "/api/auth/sso/callback"}
+WEBHOOK_PATHS = {"/webhooks/menti/members", "/api/internal/menti/events"}
+
+
 def event_ordering(sequence: Any, occurred_at: Any) -> int:
     """Order member events, falling back to Menti's `occurred_at` millisecond clock.
 
@@ -195,8 +202,10 @@ class WikiWebApp:
                 raise StoreError("Menti login is not configured.")
             state = self.auth.store.issue_state()
             query = urllib.parse.urlencode({"response_type": "code", "client_id": os.environ.get("MENTI_CLIENT_ID", ""), "redirect_uri": os.environ.get("MENTI_REDIRECT_URI", ""), "state": state})
-            return 302, {"Location": authorize + ("&" if "?" in authorize else "?") + query, "Set-Cookie": f"lw_oauth_state={state}; HttpOnly; Secure; SameSite=Lax; Path=/auth; Max-Age=300"}, b""
-        if route == "/auth/callback":
+            # Path=/ because Menti's registered callback lives under /api/auth/...,
+            # so a narrower path would not be sent back on the callback request.
+            return 302, {"Location": authorize + ("&" if "?" in authorize else "?") + query, "Set-Cookie": f"lw_oauth_state={state}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=300"}, b""
+        if route in CALLBACK_PATHS:
             query = urllib.parse.parse_qs(parsed.query)
             state = query.get("state", [""])[0]
             cookie_state = next((value.split("=", 1)[1] for value in self._header(headers, "Cookie").split(";") if value.strip().startswith("lw_oauth_state=")), "")
@@ -239,7 +248,7 @@ class WikiWebApp:
         raise NotFoundError("Route does not exist.")
 
     def post(self, path: str, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, str], bytes]:
-        if path == "/webhooks/menti/members":
+        if path in WEBHOOK_PATHS:
             secret = os.environ.get("MENTI_WEBHOOK_SECRET", "")
             if not AuthService.verify_webhook(
                 secret,
