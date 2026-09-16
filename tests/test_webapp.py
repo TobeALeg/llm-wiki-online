@@ -265,10 +265,10 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("registration_endpoint", json.loads(body))
 
-        status, headers, _ = self.app.get("/mcp/setup", {})
+        status, headers, _ = self.app.get("/connect", {})
         self.assertEqual(status, 302)
         self.assertEqual(headers["Location"], "/auth/login")
-        status, _, body = self.app.get("/mcp/setup", {"Cookie": f"lw_session={self.session}"})
+        status, _, body = self.app.get("/connect", {"Cookie": f"lw_session={self.session}"})
         self.assertEqual(status, 200)
         self.assertIn(b"Company MCP Key", body)
 

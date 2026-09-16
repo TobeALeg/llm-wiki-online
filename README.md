@@ -26,7 +26,7 @@ codex mcp login lw-company
 
 不支持 OAuth 的客户端使用静态 Bearer Key：
 
-1. 登录 `https://lw.app.mentti.work/mcp/setup`。
+1. 登录 `https://lw.app.mentti.work/connect`。
 2. 生成并立即复制只显示一次的 `lw_pat_...` Key。
 3. 在启动 Codex 的终端中执行：
 

@@ -19,7 +19,7 @@ GitHub issue 或提交记录。
    `/mcp` 反向代理。mentti 登记、DNS、TLS 和代理不是同一个验收项。
 3. 在服务器部署 Nginx 配置和 Compose 服务，执行 `docker compose up -d --build --wait`，再确认 `/healthz` 返回 `status=ok`。
 4. 检查 `/healthz`、登录回调、两个 `/.well-known/` OAuth 元数据、PKCE 授权码与
-   refresh token 轮换、`/mcp/setup` 个人 Key，以及远程 `/mcp` 的真实调用。
+   refresh token 轮换、`/connect` 个人 Key，以及远程 `/mcp` 的真实调用。
 
 Compose 将 web 和 mcp 仅绑定到宿主机回环地址 8000/4310，宿主机 Nginx 使用这两个
 地址转发；它们不会直接暴露到公网。若使用 GitHub Actions 部署，还需配置

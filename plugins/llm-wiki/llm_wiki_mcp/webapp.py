@@ -104,7 +104,7 @@ READER_HTML = r"""<!doctype html>
   </style>
 </head>
 <body>
-  <header><h1>LLM Wiki</h1><form id="search"><input name="q" aria-label="搜索 Wiki" autocomplete="off"><button>搜索</button></form><a class="readme" href="/mcp/setup">MCP Key</a><a class="readme" href="/readme.md">MCP 接入说明</a></header>
+  <header><h1>LLM Wiki</h1><form id="search"><input name="q" aria-label="搜索 Wiki" autocomplete="off"><button>搜索</button></form><a class="readme" href="/connect">MCP Key</a><a class="readme" href="/readme.md">MCP 接入说明</a></header>
   <main><aside><h2>页面目录</h2><div id="list" class="page-list"><div class="state">正在读取…</div></div></aside><article id="detail"><div class="state">请选择一个页面。</div></article></main>
   <script>
     const list = document.getElementById('list');
@@ -165,7 +165,7 @@ input,pre{width:100%;box-sizing:border-box;padding:12px;border:1px solid #c9c9bd
 <script>
 const createButton=document.getElementById('create'),labelInput=document.getElementById('label'),resultSection=document.getElementById('result'),keyOutput=document.getElementById('key'),commandOutput=document.getElementById('command'),credentials=document.getElementById('credentials');
 const escapeHtml=v=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function load(){const r=await fetch('/api/mcp-credentials');if(r.status===401){location.href='/auth/login?return_to=%2Fmcp%2Fsetup';return}const data=await r.json();credentials.innerHTML=data.credentials.length?data.credentials.map(c=>`<p><strong>${escapeHtml(c.label||c.token_kind)}</strong> · ${c.revoked_at?'已撤销':`有效至 ${new Date(c.expires_at*1000).toLocaleString()} <button data-id="${escapeHtml(c.credential_id)}">撤销</button>`}</p>`).join(''):'暂无 Key。';credentials.querySelectorAll('[data-id]').forEach(b=>b.onclick=async()=>{await fetch('/api/mcp-credentials/revoke',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential_id:b.dataset.id})});load()})}
+async function load(){const r=await fetch('/api/mcp-credentials');if(r.status===401){location.href='/auth/login?return_to=%2Fconnect';return}const data=await r.json();credentials.innerHTML=data.credentials.length?data.credentials.map(c=>`<p><strong>${escapeHtml(c.label||c.token_kind)}</strong> · ${c.revoked_at?'已撤销':`有效至 ${new Date(c.expires_at*1000).toLocaleString()} <button data-id="${escapeHtml(c.credential_id)}">撤销</button>`}</p>`).join(''):'暂无 Key。';credentials.querySelectorAll('[data-id]').forEach(b=>b.onclick=async()=>{await fetch('/api/mcp-credentials/revoke',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential_id:b.dataset.id})});load()})}
 createButton.onclick=async()=>{const r=await fetch('/api/mcp-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:labelInput.value})});const data=await r.json();if(!r.ok){alert('生成失败');return}keyOutput.textContent=data.access_token;commandOutput.textContent=`read -s LW_MCP_TOKEN && export LW_MCP_TOKEN\ncodex mcp add lw-company --url https://lw.app.mentti.work/mcp --bearer-token-env-var LW_MCP_TOKEN`;resultSection.hidden=false;load()};load();
 </script></main></body></html>"""
 
@@ -273,7 +273,7 @@ class WikiWebApp:
             params = {key: values[0] for key, values in urllib.parse.parse_qs(parsed.query).items()}
             request = self.oauth.begin_authorization(params, member["subject"])
             return 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}, oauth_consent_html(request)
-        if route == "/" or route in README_PATHS or route == "/mcp/setup":
+        if route == "/" or route in README_PATHS or route in {"/connect", "/mcp/setup"}:
             # A browser lands here straight from the mentti app directory, so an
             # anonymous visitor must be sent into the login flow. The JSON 401
             # below is only correct for the fetch-based API routes.
@@ -283,7 +283,7 @@ class WikiWebApp:
                 return 302, {"Location": "/auth/login"}, b""
             if route in README_PATHS:
                 return 200, {"Content-Type": "text/markdown; charset=utf-8"}, readme_bytes()
-            if route == "/mcp/setup":
+            if route in {"/connect", "/mcp/setup"}:
                 return 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}, MCP_SETUP_HTML.encode("utf-8")
             return 200, {"Content-Type": "text/html; charset=utf-8"}, READER_HTML.encode("utf-8")
         member = self._member(headers)

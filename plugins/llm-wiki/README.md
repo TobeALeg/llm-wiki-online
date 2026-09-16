@@ -27,7 +27,7 @@ codex mcp login lw-company
 
 ## 备选：个人 MCP Key
 
-1. 登录 `https://lw.app.mentti.work/mcp/setup`。
+1. 登录 `https://lw.app.mentti.work/connect`。
 2. 点击“生成 Key”，立即复制页面只显示一次的 `lw_pat_...`。
 3. 在启动 Codex 的终端中配置：
 
@@ -38,7 +38,7 @@ codex mcp add lw-company \
   --bearer-token-env-var LW_MCP_TOKEN
 ```
 
-Key 与个人 mentti 身份绑定，可以在 `/mcp/setup` 撤销；成员被停用后已有 Key 也会失效。
+Key 与个人 mentti 身份绑定，可以在 `/connect` 撤销；成员被停用后已有 Key 也会失效。
 不要把 Key 写入仓库、聊天记录或共享文档。
 
 ## 能力与数据边界
