@@ -480,7 +480,16 @@ def drop_drifted_sources(root: Path, run: dict[str, Any], batch: list[dict[str, 
 
 
 def commit_run(root: Path, run: dict[str, Any]) -> None:
-    (runs_dir(root) / f"{run['run_id']}.json").unlink(missing_ok=True)
+    """Close the open run, enforcing the one-open-run-per-project invariant.
+
+    Committing the finished run means the project has no open run, so any other
+    manifest is stale. Leaving one behind would make every later `update` replay
+    it and resend work that was already paid for.
+    """
+
+    location = runs_dir(root)
+    for manifest in location.glob("*.json"):
+        manifest.unlink(missing_ok=True)
 
 
 def prepare_batches(run: dict[str, Any], budget: int) -> list[list[dict[str, Any]]]:

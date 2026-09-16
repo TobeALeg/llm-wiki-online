@@ -471,6 +471,20 @@ class FailureAndResumeTests(WikiIngestTestCase):
 
         self.assertEqual(chosen["run_id"], newest["run_id"])
 
+    def test_committing_a_run_clears_every_manifest(self):
+        """A leftover manifest would otherwise replay forever and resend paid-for work."""
+
+        self.write("xyz.md", long_document(paragraphs=20))
+        state, records = self.rebuild()
+        run = wiki.create_run(self.root, wiki.plan_ingest(state, records))
+        stale = wiki.runs_dir(self.root) / "run-0000000000000000.json"
+        stale.write_text(json.dumps({**run, "run_id": "run-0000000000000000"}), encoding="utf-8")
+
+        wiki.commit_run(self.root, run)
+
+        self.assertEqual(list(wiki.runs_dir(self.root).glob("*.json")), [])
+        self.assertIsNone(wiki.load_run(self.root))
+
 
 class ModelPayloadTests(WikiIngestTestCase):
     def test_the_batch_carries_chunk_text_offsets_and_a_short_handle(self):
