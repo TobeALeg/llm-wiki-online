@@ -150,6 +150,20 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(result["status"], "applied")
         self.assertFalse(self.auth_store.member("member-1")["enabled"])
 
+    def test_anonymous_browser_is_sent_to_login_not_json(self):
+        status, headers, body = self.app.get("/", {})
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], "/auth/login")
+        self.assertEqual(body, b"")
+
+        # The fetch-based API routes keep returning a 401 the reader JS can act on.
+        with self.assertRaises(AuthError):
+            self.app.get("/api/wiki/pages", {})
+
+        status, _, html = self.app.get("/", {"Cookie": f"lw_session={self.session}"})
+        self.assertEqual(status, 200)
+        self.assertIn(b"escapeHtml", html)
+
     def test_headers_are_case_insensitive_and_missing_versions_are_not_found(self):
         status, _, _ = self.app.get("/api/wiki/status", {"authorization": f"Bearer {self.auth.issue_mcp_token(self.session)['access_token']}"})
         self.assertEqual(status, 200)

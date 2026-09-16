@@ -206,7 +206,13 @@ class WikiWebApp:
             login = self.auth.login_with_code(query.get("code", [""])[0])
             return 302, {"Location": "/", "Set-Cookie": f"lw_session={login['session_token']}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={self.auth.session_ttl}"}, b""
         if route == "/":
-            self._member(headers)
+            # A browser lands here straight from the Menti app directory, so an
+            # anonymous visitor must be sent into the login flow. The JSON 401
+            # below is only correct for the fetch-based API routes.
+            try:
+                self._member(headers)
+            except AuthError:
+                return 302, {"Location": "/auth/login"}, b""
             return 200, {"Content-Type": "text/html; charset=utf-8"}, READER_HTML.encode("utf-8")
         member = self._member(headers)
         if route == "/api/wiki/status":
