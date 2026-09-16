@@ -10,6 +10,7 @@ import re
 import threading
 import time
 import urllib.parse
+import uuid
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -77,10 +78,7 @@ READER_HTML = r"""<!doctype html>
     header { display: flex; gap: 14px; align-items: center; padding: 22px max(24px, calc((100vw - 1180px) / 2)); background: #1f332b; color: #f9f7ef; }
     header h1 { margin: 0; font: 600 24px/1.1 Georgia, serif; letter-spacing: .02em; }
     form { display: flex; flex: 1; max-width: 620px; gap: 8px; }
-    .readme { color: #f9f7ef; font-size: 14px; white-space: nowrap; opacity: .85; text-decoration: none; }
-    .readme:hover { opacity: 1; text-decoration: underline; }
     input { width: 100%; border: 1px solid #c9c9bd; border-radius: 999px; padding: 10px 16px; font: inherit; background: #fffef9; }
-    select { border: 1px solid #c9c9bd; border-radius: 999px; padding: 10px 14px; font: inherit; background: #fffef9; max-width: 220px; }
     button { border: 0; border-radius: 999px; padding: 10px 18px; background: #d4a94a; color: #1d241e; font-weight: 650; cursor: pointer; }
     main { display: grid; grid-template-columns: minmax(260px, 360px) 1fr; gap: 22px; max-width: 1180px; margin: 30px auto; padding: 0 24px; }
     aside, article { background: #fffef9; border: 1px solid #deddd3; border-radius: 14px; }
@@ -101,16 +99,53 @@ READER_HTML = r"""<!doctype html>
     .body a { color: #275d48; }
     .sources { border-top: 1px solid #deddd3; margin-top: 34px; padding-top: 16px; color: #62675f; font-size: 13px; }
     .state { color: #62675f; padding: 22px 8px; line-height: 1.6; }
+    button, input, summary { font: inherit; }
+    button { min-height: 40px; padding: 8px 14px; border-radius: 8px; white-space: nowrap; flex-shrink: 0; font-size: 14px; font-weight: 600; }
+    button:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid #a87925; outline-offset: 3px; }
+    button:disabled { opacity: .5; cursor: wait; }
+    header { justify-content: space-between; }
+    header h1 { flex-shrink: 0; }
+    #search { margin: 0; min-width: 0; }
+    #search input { min-width: 0; border-radius: 8px; height: 40px; }
+    main { grid-template-columns: 220px 1fr; align-items: start; }
+    aside { display: flex; flex-direction: column; gap: 24px; }
+    .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .section-heading h2 { margin: 0; }
+    .quiet { background: transparent; color: #62675f; }
+    .quiet:hover { background: #efeee7; color: #20221f; }
+    .project-list { display: grid; gap: 4px; }
+    .project-button { width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; background: transparent; color: #62675f; }
+    .project-button[aria-current="true"] { background: #e5ece3; color: #244b38; }
+    .page-card { white-space: normal; overflow-wrap: anywhere; }
+    .page-card span { font-weight: 400; line-height: 1.5; }
+    .settings { border-top: 1px solid #deddd3; padding-top: 16px; font-size: 14px; color: #62675f; }
+    .settings summary { cursor: pointer; padding: 8px 0; }
+    .settings a { display: block; padding: 8px 0; color: #62675f; text-decoration: none; }
+    .settings a:hover { color: #275d48; text-decoration: underline; }
+    dialog { width: min(420px, calc(100% - 32px)); border: 1px solid #deddd3; border-radius: 16px; padding: 28px; background: #fffef9; color: #20221f; }
+    dialog::backdrop { background: #14251b66; }
+    dialog h2 { margin: 0 0 24px; font-size: 22px; }
+    #create-project { display: grid; gap: 12px; }
+    #create-project input { border-radius: 8px; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+    #create-error { color: #a23529; margin: 0; font-size: 14px; }
     @media (max-width: 760px) { header { flex-wrap: wrap; } form { order: 2; flex-basis: 100%; } main { grid-template-columns: 1fr; margin-top: 18px; } article { min-height: 420px; } }
   </style>
 </head>
 <body>
-  <header><h1>LLM Wiki</h1><select id="project" aria-label="选择项目"></select><button id="new-project" type="button">新建项目</button><form id="search"><input name="q" aria-label="搜索 Wiki" autocomplete="off"><button>搜索</button></form><a class="readme" href="/connect">MCP Key</a><a class="readme" href="/readme.md">MCP 接入说明</a></header>
-  <main><aside><h2>页面目录</h2><div id="list" class="page-list"><div class="state">正在读取…</div></div></aside><article id="detail"><div class="state">请选择一个页面。</div></article></main>
+  <header><h1>LLM Wiki</h1><form id="search" role="search"><input name="q" aria-label="搜索当前项目" placeholder="搜索当前项目" autocomplete="off"><button type="submit">搜索</button></form></header>
+  <main><aside aria-label="Wiki 导航">
+    <section><div class="section-heading"><h2>项目</h2><button id="new-project" class="quiet" type="button">＋ 新建</button></div><nav id="projects" class="project-list" aria-label="项目"></nav></section>
+    <section><h2>页面目录</h2><div id="list" class="page-list"><div class="state">正在读取…</div></div></section>
+    <details class="settings"><summary>设置</summary><a href="/connect">MCP Key 管理</a><a href="/readme.md">MCP 接入说明</a></details>
+  </aside><article id="detail" aria-live="polite"><div class="state">请选择一个页面。</div></article></main>
+  <dialog id="project-dialog" aria-labelledby="project-dialog-title"><h2 id="project-dialog-title">新建项目</h2><form id="create-project"><label for="project-name">项目名称</label><input id="project-name" name="name" required maxlength="120" autocomplete="off" autofocus><p id="create-error" role="alert" hidden></p><div class="dialog-actions"><button type="button" id="cancel-project" class="quiet">取消</button><button type="submit">创建项目</button></div></form></dialog>
   <script>
     const list = document.getElementById('list');
     const detail = document.getElementById('detail');
-    const projectSelect = document.getElementById('project');
+    const projectList = document.getElementById('projects');
+    let listRequest = 0;
+    let pageRequest = 0;
     let currentProject = 'company';
     const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
     const safeMarkdown = (value) => {
@@ -127,44 +162,73 @@ READER_HTML = r"""<!doctype html>
     };
     const projectQuery = () => '?project_id=' + encodeURIComponent(currentProject);
     const openPage = async (slug) => {
+      const request = ++pageRequest;
       detail.innerHTML = state('正在读取…');
       try {
         const response = await fetch('/api/wiki/pages/' + encodeURIComponent(slug) + projectQuery(), {credentials:'same-origin'});
         if (response.status === 401) { location.href = '/auth/login'; return; }
         if (!response.ok) throw new Error('page');
         const result = await response.json();
+        if (request !== pageRequest) return;
+        list.querySelectorAll('[data-slug]').forEach(button => button.classList.toggle('active', button.dataset.slug === slug));
         const page = result.page;
         detail.innerHTML = `<h2>${escapeHtml(page.title)}</h2><div class="meta"><span>类型：${escapeHtml(page.type)}</span><span>状态：${escapeHtml(page.status)}</span><span>更新：${escapeHtml(page.updated_at)}</span><span>版本：${escapeHtml(result.version)}</span></div><div class="body">${safeMarkdown(page.body)}</div><div class="sources">来源：${page.sources.map(escapeHtml).join('、')}</div>`;
         detail.querySelectorAll('a[href^="#page="]').forEach(link => link.addEventListener('click', (event) => { event.preventDefault(); openPage(link.getAttribute('href').slice(6)); }));
-      } catch (error) { detail.innerHTML = state('页面读取失败，请稍后重试。'); }
+      } catch (error) { if (request !== pageRequest) return; detail.innerHTML = state('页面读取失败，请稍后重试。'); }
     };
-    const loadPages = async (url='/api/wiki/pages') => {
+    const loadPages = async (url='/api/wiki/pages' + projectQuery()) => {
+      const request = ++listRequest;
+      ++pageRequest;
+      detail.innerHTML = state('正在读取…');
       list.innerHTML = state('正在读取…');
       try {
         const response = await fetch(url, {credentials:'same-origin'});
         if (response.status === 401) { location.href = '/auth/login'; return; }
         if (!response.ok) throw new Error('list');
-        const result = await response.json(); renderList(result.pages);
+        const result = await response.json();
+        if (request !== listRequest) return;
+        renderList(result.pages);
+        if (!result.pages.length) detail.innerHTML = state(url.startsWith('/api/wiki/search') ? '没有找到匹配页面。' : '暂无已提交页面。');
         if (result.pages.length) openPage(result.pages[0].slug);
-      } catch (error) { list.innerHTML = state('服务暂时不可用，请稍后重试。'); }
+      } catch (error) { if (request !== listRequest) return; list.innerHTML = state('服务暂时不可用，请稍后重试。'); detail.innerHTML = state('无法读取页面。'); }
     };
     const loadProjects = async () => {
       const response = await fetch('/api/wiki/projects', {credentials:'same-origin'});
       if (!response.ok) throw new Error('projects');
       const result = await response.json();
-      projectSelect.innerHTML = result.projects.map(project => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`).join('');
       currentProject = result.projects.some(project => project.id === currentProject) ? currentProject : result.projects[0].id;
-      projectSelect.value = currentProject;
+      projectList.innerHTML = result.projects.map(project => `<button type="button" class="project-button" data-project="${escapeHtml(project.id)}" aria-current="${project.id === currentProject}">${escapeHtml(project.name)}</button>`).join('');
+      projectList.querySelectorAll('[data-project]').forEach(button => button.addEventListener('click', () => {
+        currentProject = button.dataset.project;
+        projectList.querySelectorAll('[data-project]').forEach(item => item.setAttribute('aria-current', String(item === button)));
+        document.getElementById('search').reset();
+        loadPages();
+      }));
     };
-    projectSelect.addEventListener('change', () => { currentProject = projectSelect.value; loadPages(); });
-    document.getElementById('new-project').addEventListener('click', async () => {
-      const name = window.prompt('项目名称');
-      if (!name || !name.trim()) return;
-      const id = window.prompt('项目 ID（小写字母、数字、短横线或下划线）');
-      if (!id || !id.trim()) return;
-      const response = await fetch('/api/wiki/projects', {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body:JSON.stringify({id:id.trim(), name:name.trim()})});
-      if (!response.ok) { window.alert('创建项目失败，请检查 ID 是否重复或格式正确。'); return; }
-      currentProject = id.trim().toLowerCase(); await loadProjects(); loadPages();
+    const projectDialog = document.getElementById('project-dialog');
+    const createForm = document.getElementById('create-project');
+    const createError = document.getElementById('create-error');
+    document.getElementById('new-project').addEventListener('click', () => { createForm.reset(); createError.hidden = true; projectDialog.showModal(); });
+    document.getElementById('cancel-project').addEventListener('click', () => projectDialog.close());
+    createForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const name = new FormData(createForm).get('name').trim();
+      if (!name) { createError.textContent = '请输入项目名称。'; createError.hidden = false; return; }
+      const submit = createForm.querySelector('[type="submit"]');
+      submit.disabled = true;
+      createError.hidden = true;
+      try {
+        const response = await fetch('/api/wiki/projects', {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body:JSON.stringify({name})});
+        if (response.status === 401) { location.href = '/auth/login'; return; }
+        if (!response.ok) throw new Error('create');
+        const project = await response.json();
+        currentProject = project.id;
+        projectDialog.close();
+        document.getElementById('search').reset();
+        try { await loadProjects(); await loadPages(); }
+        catch (error) { list.innerHTML = state('项目已创建，目录读取失败，请刷新页面。'); detail.innerHTML = ''; }
+      } catch (error) { createError.textContent = '创建失败，请稍后重试。'; createError.hidden = false; }
+      finally { submit.disabled = false; }
     });
     document.getElementById('search').addEventListener('submit', (event) => { event.preventDefault(); const query = new FormData(event.currentTarget).get('q'); loadPages(query ? '/api/wiki/search?q=' + encodeURIComponent(query) + '&project_id=' + encodeURIComponent(currentProject) : '/api/wiki/pages?project_id=' + encodeURIComponent(currentProject)); });
     loadProjects().then(loadPages).catch(() => { list.innerHTML = state('项目读取失败，请稍后重试。'); });
@@ -384,7 +448,7 @@ class WikiWebApp:
             return 302, {"Location": location, "Cache-Control": "no-store"}, b""
         payload = self._json(body)
         if path == "/api/wiki/projects":
-            return self.response(201, self.shared.create_project(member["subject"], str(payload.get("id", "")), str(payload.get("name", ""))))
+            return self.response(201, self.shared.create_project(member["subject"], str(payload["id"]) if "id" in payload else "project-" + uuid.uuid4().hex, str(payload.get("name", ""))))
         if path == "/api/mcp-token":
             return self.response(200, self.auth.issue_mcp_token(self._session_token(headers), str(payload.get("label", "Terminal"))))
         if path == "/api/mcp-credentials/revoke":

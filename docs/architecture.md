@@ -64,7 +64,11 @@ Each Project has its own snapshot version, page slug namespace, source namespace
 history, audit log and idempotency keys. Both MCP and browser reads query the
 same committed Project snapshot version. Only the authenticated MCP write tools
 commit company content; the browser API can create a Project and otherwise
-reads content. Clients can submit content and source identifiers, but never a
+reads content. Name-only browser project creation generates a UUID-based ID at the
+HTTP boundary; explicit IDs remain supported for existing API callers. Reader
+requests always include the selected Project ID, and request sequence counters
+prevent stale list/detail responses from replacing a newer selection.
+Clients can submit content and source identifiers, but never a
 server filesystem path.
 
 ## status flow

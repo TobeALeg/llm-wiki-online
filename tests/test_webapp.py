@@ -85,6 +85,18 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(result["project_id"], "jetbao")
         self.assertEqual(result["page_count"], 0)
 
+    def test_name_only_project_creation_generates_unique_selectable_ids(self):
+        ids = []
+        for _ in range(2):
+            status, project = self.request("POST", "/api/wiki/projects", {"name": "研发知识库"})
+            self.assertEqual(status, 201)
+            self.assertEqual(project["name"], "研发知识库")
+            ids.append(project["id"])
+            status, pages = self.request("GET", "/api/wiki/pages?project_id=" + project["id"])
+            self.assertEqual(status, 200)
+            self.assertEqual(pages["pages"], [])
+        self.assertNotEqual(*ids)
+
     def test_project_query_does_not_leak_pages_between_projects(self):
         self.store.create_project("jetbao", "JetBao", "member-1")
         self.store.commit_update("member-1", 0, "company-page", [{"source_id": "company:guide", "content": "Company"}], {
