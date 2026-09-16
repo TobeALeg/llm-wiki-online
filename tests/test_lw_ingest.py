@@ -265,6 +265,87 @@ class InvalidModelOutputTests(WikiIngestTestCase):
         self.assertEqual(len(list(self.pages_dir.glob("*.md"))), 1)
         self.assertEqual(wiki.load_state(self.root)["files"]["notes.md"]["status"], "complete")
 
+    def test_a_slug_the_filesystem_cannot_hold_is_rejected_before_any_progress(self):
+        """Found by review: a 253-character slug passed validation and failed at write time."""
+
+        self.write("notes.md", "A decision.\n")
+        real_source = wiki.plan_ingest(
+            wiki.load_state(self.root), wiki.scan_records(self.root)
+        )["files"][0]["source_id"]
+        huge = self.bad_page(real_source)
+        huge["slug"] = "a" * 253
+
+        with mock.patch.object(wiki, "call_model", return_value={"pages": [huge], "note": ""}):
+            with self.assertRaises(wiki.WikiError) as caught:
+                wiki.do_update(self.root, args())
+        self.assertIn("slug", str(caught.exception).lower(), "the slug is what is rejected")
+
+        self.assertEqual(list(self.pages_dir.glob("*.md")), [], "nothing is written")
+        recorded = wiki.load_run(self.root)
+        self.assertIsNotNone(recorded, "the run stays open so a retry can finish it")
+        self.assertEqual(
+            [unit["chunk_id"] for unit in recorded["units"] if unit.get("done")],
+            [],
+            "the rejected batch made no progress",
+        )
+
+        calls = []
+        with mock.patch.object(wiki, "call_model", side_effect=answering_model(calls)):
+            wiki.do_update(self.root, args())
+
+        self.assertTrue(calls, "the retry asks the model again instead of replaying the bad draft")
+        self.assertIsNone(wiki.load_run(self.root), "the run converges once the model behaves")
+
+    def test_a_non_object_model_response_raises_a_wiki_error(self):
+        """The check lives inside call_model, so it needs a real HTTP response to exercise."""
+
+        response = mock.MagicMock()
+        response.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": '["not", "an", "object"]'}}]}
+        ).encode("utf-8")
+        response.__enter__ = lambda self: response
+        response.__exit__ = lambda *args: False
+
+        with mock.patch.dict(os.environ, {"LLM_WIKI_API_KEY": "test-key"}):
+            with mock.patch("urllib.request.urlopen", return_value=response):
+                with self.assertRaises(wiki.WikiError) as caught:
+                    wiki.call_model({"chunks": []}, "purpose", [])
+        self.assertIn("object", str(caught.exception).lower())
+
+    def test_a_failed_page_write_leaves_no_page_on_disk(self):
+        """A partial multi-page commit must not leave an uncataloged page behind."""
+
+        self.write("a.md", "First decision.\n")
+        self.write("b.md", "Second decision.\n")
+
+        def two_pages(payload, purpose, pages):
+            sources = sorted({unit["source_id"] for unit in payload["chunks"]})
+            if not sources:
+                return {"pages": [], "note": ""}
+            return {
+                "pages": [
+                    page("first-topic", sources[0]),
+                    page("second-topic", sources[0]),
+                ],
+                "note": "two pages",
+            }
+
+        real_write = Path.write_text
+
+        def failing_write(self, data, *args, **kwargs):
+            if "second-topic" in str(self):
+                raise OSError(28, "No space left on device")
+            return real_write(self, data, *args, **kwargs)
+
+        with mock.patch.object(wiki, "call_model", side_effect=two_pages):
+            with mock.patch.object(Path, "write_text", failing_write):
+                with self.assertRaises(OSError):
+                    wiki.do_update(self.root, args())
+
+        self.assertEqual(
+            list(self.pages_dir.glob("*.md")), [], "a half-written commit publishes nothing"
+        )
+
     def test_a_batch_that_fails_validation_is_not_recorded_as_done(self):
         self.write("notes.md", long_document(paragraphs=20))
         state, records = self.rebuild()

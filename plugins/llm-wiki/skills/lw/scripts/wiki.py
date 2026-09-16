@@ -22,6 +22,9 @@ import chunking  # noqa: E402
 WIKI_DIR = ".llm-wiki"
 STATE_VERSION = 2
 MAX_FILE_BYTES = 128 * 1024
+# A page slug becomes a file name, so it must stay inside what the filesystem accepts.
+# The same bound is enforced by the shared store's validator.
+MAX_PAGE_SLUG_CHARS = 80
 DEFAULT_MATERIAL_BUDGET = 180_000
 ALLOWED_TYPES = {"concept", "decision", "guide", "reference", "person", "client", "process", "system"}
 ALLOWED_STATUSES = {"current", "draft", "superseded", "archived"}
@@ -607,6 +610,8 @@ def call_model(payload_data: dict[str, Any], purpose: str, pages: list[dict[str,
         update = json.loads(content)
     except json.JSONDecodeError as exc:
         raise WikiError(f"Model did not return valid JSON: {exc}") from exc
+    if not isinstance(update, dict):
+        raise WikiError("The model did not return a JSON object.")
     update["_provider"] = {"base_url": base_url, "model": model}
     return update
 
@@ -617,6 +622,10 @@ def validate_page(page: Any, allowed_sources: set[str]) -> dict[str, Any]:
     slug = str(page.get("slug", "")).strip()
     if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug):
         raise WikiError(f"Unsafe or invalid page slug: {slug!r}")
+    if len(slug) > MAX_PAGE_SLUG_CHARS:
+        raise WikiError(
+            f"Page slug exceeds the {MAX_PAGE_SLUG_CHARS} character limit: {slug[:40]!r}..."
+        )
     page_type = str(page.get("type", ""))
     status = str(page.get("status", ""))
     if page_type not in ALLOWED_TYPES:
@@ -759,14 +768,26 @@ def run_source_ids(root: Path, run: dict[str, Any], records: dict[str, dict[str,
 def commit_update(root: Path, state: dict[str, Any], run: dict[str, Any], records: dict[str, dict[str, Any]], pages: list[Any], episodes: list[dict[str, Any]], notes: list[str], provider: dict[str, Any]) -> list[str]:
     allowed_sources = run_source_ids(root, run, records, episodes)
     validated = [validate_page(page, allowed_sources) for page in pages]
-    changed = []
+    # Stage every page before publishing any of them. A failure part way through a
+    # multi-page commit would otherwise leave a page on disk that the catalog does not
+    # know about, and the retry would try to write it again. A slug repeated across
+    # batches keeps its last version, so each slug stages exactly one file.
+    by_slug: dict[str, dict[str, Any]] = {}
     for page in validated:
-        target = wiki_path(root) / "pages" / f"{page['slug']}.md"
-        target.write_text(render_page(page), encoding="utf-8")
+        by_slug[page["slug"]] = page
+    staged: list[tuple[Path, Path]] = []
+    for slug, page in by_slug.items():
+        target = wiki_path(root) / "pages" / f"{slug}.md"
+        temporary = target.with_name(f".{slug}.md.staged")
+        temporary.write_text(render_page(page), encoding="utf-8")
+        staged.append((temporary, target))
+    for temporary, target in staged:
+        temporary.replace(target)
+    changed = list(by_slug)
+    for page in by_slug.values():
         state.setdefault("pages", {})[page["slug"]] = {key: page[key] for key in (
             "title", "type", "status", "tags", "summary", "sources", "updated_at"
         )}
-        changed.append(page["slug"])
     state["files"] = tracked_files(root, state, run, records)
     processed = set(state.get("processed_episodes", []))
     processed.update(episode["id"] for episode in episodes)

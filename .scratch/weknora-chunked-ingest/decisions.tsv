@@ -37,3 +37,7 @@ ts	phase	decision	why	evidence	result
 2026-09-16T11:05:00Z	fix	do_update 的空批次跳过改为仅在没有待投递 episode 时才跳过	根因是我修来源漂移时加的 if not batch: continue 把投递 episode 的空批次也跳过了；只有当批次为空且无 episode 才能跳过	tests/test_lw_ingest.py:EpisodeDeliveryTests 三条 + e2e 两条	绿，回退即红
 2026-09-16T11:20:00Z	verify	第四个验证者给 PASS+NOTES，又发现同族缺陷：模型返回的页面在提交时校验失败，manifest 留下且全部块已标记完成，重试 0 请求、重复校验同一份坏草稿、永久卡死；main 上健康重试即可收敛	第四个卡死类缺陷；各自打补丁说明前提有问题	验证者给出 0 请求 / manifest 18/18 done / 2 个 drafted_pages 的证据	已复现，转攻前提
 2026-09-16T11:35:00Z	fix	攻击前提而非再打一个补丁：草稿在写入 manifest 之前就校验，校验不通过的批次不算完成、不存草稿。允许集合的构造抽成 run_source_ids，批次内与最终提交共用	只要 manifest 里能存下永远无法提交的东西，这一族卡死缺陷就会不断产生；让这个前提不成立才是根治	tests/test_lw_ingest.py:InvalidModelOutputTests；回退修复后 done 标记又出现	绿，回退即红，131 测试
+2026-09-16T11:50:00Z	verify	第五个验证者再给 FAIL，指出 d6c50b9 把校验提前了却没有让提交写入原子化：253 字符的 slug 能过校验、写文件时才因文件名过长失败，且逐页写入会留下已写未登记的半提交	同族第五例；验证者一句话点出结构弱点——通过校验不等于提交必成功	验证者给出 253 字符 slug、5 次 update、0 请求、manifest 不清的证据	已复现，转攻前提
+2026-09-16T12:00:00Z	fix	让校验真正成为提交的前置条件：加 MAX_PAGE_SLUG_CHARS 上限（与共享存储的校验器一致），页面先写临时文件、全部成功后再统一 rename，call_model 对非对象响应直接报 WikiError	只要通过校验与写入成功之间还有缝隙，这族卡死就会继续出现；堵住缝隙而不是再补一个点	tests/test_lw_ingest.py:InvalidModelOutputTests 五条	绿
+2026-09-16T12:10:00Z	review	变异验证发现我自己两条测试是因错误原因通过的：slug 测试用了不合法的伪来源 ID（先被未知来源拒绝），非对象测试 mock 掉了 call_model 因而根本不执行新检查	先怀疑观测方法；一个因错误原因变绿的测试等于没有测试	重写两条测试后，回退各自修复都会变红	已修正，三条修复均变异验证
+2026-09-16T12:15:00Z	fix	原子写入第一版用同名临时文件，跨批次同 slug 时第二次 rename 找不到源文件；改为按 slug 去重（保留最后一次）并使用唯一临时名	我自己引入的回归，被既有测试当场抓住——这正是先写测试的价值	全量 134 测试绿	绿
