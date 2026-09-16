@@ -226,6 +226,65 @@ class SkipReportingTests(WikiIngestTestCase):
         self.assertIn(str(wiki.MAX_FILE_BYTES), rendered)
 
 
+class InvalidModelOutputTests(WikiIngestTestCase):
+    """The manifest must never hold a page the run cannot commit.
+
+    A batch whose output fails validation is not finished work. Recording it as
+    finished makes the retry skip the model, re-check the same bad page, and fail
+    again forever, with no request ever reaching the provider.
+    """
+
+    def bad_page(self, source):
+        return {
+            "slug": "delivery-plan",
+            "title": "Delivery plan",
+            "type": "decision",
+            "status": "current",
+            "tags": ["delivery"],
+            "summary": "Delivery dates.",
+            "body": "Consolidated delivery dates.",
+            "sources": [source],
+        }
+
+    def test_an_invalid_page_does_not_wedge_the_run(self):
+        self.write("notes.md", "A decision.\n")
+        ghost = self.bad_page("file:ghost.md@sha256:deadbeef0000")
+
+        with mock.patch.object(wiki, "call_model", return_value={"pages": [ghost], "note": ""}):
+            with self.assertRaises(wiki.WikiError):
+                wiki.do_update(self.root, args())
+
+        self.assertEqual(list(self.pages_dir.glob("*.md")), [], "nothing invalid is committed")
+
+        calls = []
+        with mock.patch.object(wiki, "call_model", side_effect=answering_model(calls)):
+            wiki.do_update(self.root, args())
+
+        self.assertTrue(calls, "the retry asks the model again instead of replaying the bad draft")
+        self.assertIsNone(wiki.load_run(self.root), "the run converges")
+        self.assertEqual(len(list(self.pages_dir.glob("*.md"))), 1)
+        self.assertEqual(wiki.load_state(self.root)["files"]["notes.md"]["status"], "complete")
+
+    def test_a_batch_that_fails_validation_is_not_recorded_as_done(self):
+        self.write("notes.md", long_document(paragraphs=20))
+        state, records = self.rebuild()
+        run = wiki.create_run(self.root, wiki.plan_ingest(state, records))
+
+        ghost = self.bad_page("file:ghost.md@sha256:deadbeef0000")
+        with mock.patch.object(wiki, "call_model", return_value={"pages": [ghost], "note": ""}):
+            with self.assertRaises(wiki.WikiError):
+                wiki.do_update(self.root, args())
+
+        recorded = wiki.load_run(self.root)
+        self.assertIsNotNone(recorded, "the run stays open for a retry")
+        self.assertEqual(
+            [unit["chunk_id"] for unit in recorded["units"] if unit.get("done")],
+            [],
+            "a rejected batch leaves no chunk marked done",
+        )
+        self.assertEqual(recorded.get("drafted_pages", []), [], "a rejected page is not stored")
+
+
 class PlanningTests(WikiIngestTestCase):
     def test_an_unchanged_complete_source_is_not_planned_again(self):
         self.write("notes.md", "A decision.\n")

@@ -745,12 +745,19 @@ def tracked_files(root: Path, state: dict[str, Any], run: dict[str, Any], record
     return tracked
 
 
-def commit_update(root: Path, state: dict[str, Any], run: dict[str, Any], records: dict[str, dict[str, Any]], pages: list[Any], episodes: list[dict[str, Any]], notes: list[str], provider: dict[str, Any]) -> list[str]:
+def run_source_ids(root: Path, run: dict[str, Any], records: dict[str, dict[str, Any]], episodes: list[dict[str, Any]]) -> set[str]:
+    """Every source id a page produced by this run is allowed to cite."""
+
     all_episodes = [read_json(path) for path in (wiki_path(root) / "episodes").glob("*.json")]
-    allowed_sources = known_sources(root, records, all_episodes)
-    allowed_sources.update(entry["source_id"] for entry in run["files"].values())
-    allowed_sources.update(run.get("abandoned_sources", []))
-    allowed_sources.update(f"episode:{episode['id']}" for episode in episodes)
+    allowed = known_sources(root, records, all_episodes)
+    allowed.update(entry["source_id"] for entry in run["files"].values())
+    allowed.update(run.get("abandoned_sources", []))
+    allowed.update(f"episode:{episode['id']}" for episode in episodes)
+    return allowed
+
+
+def commit_update(root: Path, state: dict[str, Any], run: dict[str, Any], records: dict[str, dict[str, Any]], pages: list[Any], episodes: list[dict[str, Any]], notes: list[str], provider: dict[str, Any]) -> list[str]:
+    allowed_sources = run_source_ids(root, run, records, episodes)
     validated = [validate_page(page, allowed_sources) for page in pages]
     changed = []
     for page in validated:
@@ -820,6 +827,11 @@ def do_update(root: Path, args: argparse.Namespace) -> None:
         raw_pages = update.get("pages", [])
         if not isinstance(raw_pages, list):
             raise WikiError("Model output field 'pages' must be a list.")
+        # Validate before recording progress. A manifest may not hold a page the run
+        # cannot commit, or every retry would skip the model and fail on the same draft.
+        allowed_sources = run_source_ids(root, run, records, episodes)
+        for page in raw_pages:
+            validate_page(page, allowed_sources)
         for unit in batch:
             unit["done"] = True
         drafts.extend(raw_pages)

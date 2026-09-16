@@ -27,3 +27,13 @@ ts	phase	decision	why	evidence	result
 2026-09-16T09:51:00Z	fix	load_run 改取最新的 manifest 而不是 sorted()[0]；v1 升级时写出 state.v1.json，并对损坏记录抛 WikiError	崩溃留下两个 manifest 时不能静默重放较旧的那个；就地重写需要留一份可比对的副本	tests/test_lw_ingest.py:FailureAndResumeTests, StateMigrationTests	绿，已做变异验证
 2026-09-16T09:52:00Z	fix	update 现在也打印 status 所打印的被跳过文件行	设计文档要求被跳过的文件必须带原因出现，而用户实际执行的是 update	commit 89b7eb2，已在真实 CLI 上验证	绿
 2026-09-16T09:53:00Z	verify	在真实 CLI 上以子进程核对定义完成的三条断言，并补上评审指出的两处 e2e 覆盖缺口	定义完成点名了这三条，所以要在发布产物上验证而不是对着辅助函数；其中 30k 边界与"未完成部分可见"两条此前断言不足	tests/test_lw_ingest_e2e.py, 5 个测试通过	VERIFIED
+2026-09-16T10:10:00Z	verify	Shipping：合并前按 playbook 要求独立验证，forge 为 gh（仓库无 origin CLI），base 就是 trunk tip	CI 绿不等于结论；需要一个没写过这份代码的验证者在真实 CLI 上对比 parent 与 head	gh pr view 11, 三个 check 全 SUCCESS 但 deploy SKIPPED	已派发独立验证者
+2026-09-16T10:20:00Z	verify	第一个独立验证者给 PASS+NOTES，但真实复现出一个缺陷：中途失败留下草稿后，编辑未完成的来源会让此后每次 update 都因草稿引用旧 source_id 而被拒，manifest 永不收敛	这正是我在文档里声称不会卡死的性质，被证伪	验证者在 PR 上贴出复现步骤与 stderr	已复现，修复
+2026-09-16T10:30:00Z	fix	放弃来源时把它的 source_id 记入 run[abandoned_sources]，提交时并入允许集合；草稿引用的是模型当时真正读到的修订（设计文档第 8 节：源文删除不证明事实为假）	丢掉已经花过模型调用换来的页面是错的；保留该修订的引用才是目的	tests/test_lw_ingest.py:test_an_abandoned_source_still_lets_the_drafted_page_commit	绿，回退即红
+2026-09-16T10:30:30Z	fix	分块器：超过上限的标题行此前直接成为超限块，改为按字符切分	验证者指出的次要瑕疵，违反硬上限不变量	tests/test_lw_chunking.py:test_an_oversized_heading_line_is_still_capped	绿
+2026-09-16T10:45:00Z	verify	patch 变了（86a3d16 → b57e349），按 playbook 第 3 步重新验证；第二个验证者 PASS+NOTES，确认旧 head 失败、新 head 收敛	verdict 绑定 SHA，改一行也要重验	PR #11 评论，旧 head exit 1 / 新 head exit 0	VERIFIED
+2026-09-16T10:50:00Z	fix	commit_run 改为清掉该项目的全部 manifest，强制单一开放运行不变量	验证者指出两个 manifest 时落选的那个永久残留，导致此后每次 update 重发已完成的块；一行修复	tests/test_lw_ingest.py:test_committing_a_run_clears_every_manifest	绿，回退即红
+2026-09-16T11:00:00Z	verify	第三个验证者给 FAIL，发现 update --episode 在没有待处理块时静默丢弃 episode 却记入 processed_episodes；main 上会投递，属我引入的回归	这正是独立门禁的价值：本地 124 个测试全绿，这条路径无覆盖	验证者给出 0 请求 / main 1 请求的对比	已复现，修复
+2026-09-16T11:05:00Z	fix	do_update 的空批次跳过改为仅在没有待投递 episode 时才跳过	根因是我修来源漂移时加的 if not batch: continue 把投递 episode 的空批次也跳过了；只有当批次为空且无 episode 才能跳过	tests/test_lw_ingest.py:EpisodeDeliveryTests 三条 + e2e 两条	绿，回退即红
+2026-09-16T11:20:00Z	verify	第四个验证者给 PASS+NOTES，又发现同族缺陷：模型返回的页面在提交时校验失败，manifest 留下且全部块已标记完成，重试 0 请求、重复校验同一份坏草稿、永久卡死；main 上健康重试即可收敛	第四个卡死类缺陷；各自打补丁说明前提有问题	验证者给出 0 请求 / manifest 18/18 done / 2 个 drafted_pages 的证据	已复现，转攻前提
+2026-09-16T11:35:00Z	fix	攻击前提而非再打一个补丁：草稿在写入 manifest 之前就校验，校验不通过的批次不算完成、不存草稿。允许集合的构造抽成 run_source_ids，批次内与最终提交共用	只要 manifest 里能存下永远无法提交的东西，这一族卡死缺陷就会不断产生；让这个前提不成立才是根治	tests/test_lw_ingest.py:InvalidModelOutputTests；回退修复后 done 标记又出现	绿，回退即红，131 测试
