@@ -40,8 +40,11 @@ VENDORED_MODULES = (
     "knowledge_types.py",
     "evidence.py",
     "claim_store.py",
+    "knowledge_service.py",
+    "knowledge_pipeline.py",
     "projection.py",
     "retrieval.py",
+    "migrate_v2.py",
     "wiki_prompts.py",
 )
 """Core modules that must exist inside the skill package verbatim.

@@ -21,6 +21,13 @@ import chunking  # noqa: E402
 
 WIKI_DIR = ".llm-wiki"
 STATE_VERSION = 2
+KNOWLEDGE_DB_NAME = "knowledge.sqlite3"
+BINDING_NAME = "binding.json"
+DEFAULT_KNOWLEDGE_SPACE = "local"
+# One config identity for the CLI, so the artifact and evidence addresses a
+# `knowledge-prepare` run prints are the ones a `knowledge-ingest` run computes.
+LW_CONFIG_HASH = "lw-cli"
+PROJECT_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
 MAX_FILE_BYTES = 128 * 1024
 # A page slug becomes a file name, so it must stay inside what the filesystem accepts.
 # The same bound is enforced by the shared store's validator.
@@ -952,6 +959,458 @@ def context(root: Path, query: str, limit: int) -> None:
         print(f"\n<!-- {name}; score={score} -->\n{content.rstrip()}\n")
 
 
+def knowledge_error_types() -> tuple[type[BaseException], ...]:
+    """The vendored core's error families, so a refusal reads as a message, not a traceback."""
+
+    types: list[type[BaseException]] = []
+    try:
+        import claim_store
+        import evidence
+        import knowledge_service
+        import knowledge_types
+    except ImportError:
+        return ()
+    types.extend(
+        [
+            claim_store.ClaimStoreError,
+            evidence.EvidenceError,
+            knowledge_service.KnowledgeServiceError,
+            knowledge_types.KnowledgeError,
+        ]
+    )
+    return tuple(types)
+
+
+def knowledge_home() -> Path:
+    """Where the local knowledge space keeps its authoritative database.
+
+    One database per machine holds every locally registered project, which is what
+    lets a topic be shared across projects. A per-project database would make
+    global topic identity impossible to implement and easy to claim anyway.
+    """
+
+    return Path(os.environ.get("LLM_WIKI_HOME", "~/.llm-wiki")).expanduser()
+
+
+def project_id_for(root: Path) -> str:
+    candidate = re.sub(r"[^a-z0-9]+", "-", root.name.lower()).strip("-")[:64].strip("-")
+    if not PROJECT_ID_RE.fullmatch(candidate):
+        return "local"
+    return candidate
+
+
+def knowledge_binding(root: Path) -> dict[str, Any]:
+    """The project binding kept beside the Markdown projection.
+
+    `.llm-wiki/` holds the binding and the rendered pages. The knowledge itself
+    lives in the home database, so deleting a checkout does not delete the
+    knowledge and copying a checkout does not duplicate it.
+    """
+
+    location = wiki_path(root)
+    location.mkdir(parents=True, exist_ok=True)
+    path = location / BINDING_NAME
+    if path.is_file():
+        binding = read_json(path)
+        if not isinstance(binding, dict) or not binding.get("project_id"):
+            raise WikiError(f"Malformed knowledge binding at {path}.")
+        return binding
+    space = (os.environ.get("LLM_WIKI_SPACE") or DEFAULT_KNOWLEDGE_SPACE).strip().lower()
+    binding = {
+        "knowledge_space_id": space or DEFAULT_KNOWLEDGE_SPACE,
+        "project_id": project_id_for(root),
+        "created_at": now_iso(),
+    }
+    write_json(path, binding)
+    return binding
+
+
+def load_knowledge_modules() -> tuple[Any, Any]:
+    """The vendored v2 core, imported lazily so the file-based commands still run."""
+
+    try:
+        import claim_store
+        import knowledge_service
+    except ImportError as exc:
+        raise WikiError(
+            f"The v2 knowledge modules are missing from this skill install: {exc}"
+        ) from exc
+    return claim_store, knowledge_service
+
+
+def knowledge_service_for(root: Path) -> tuple[Any, dict[str, Any]]:
+    claim_store, knowledge_service = load_knowledge_modules()
+    binding = knowledge_binding(root)
+    store = claim_store.ClaimStore(
+        knowledge_home() / KNOWLEDGE_DB_NAME,
+        knowledge_space_id=binding["knowledge_space_id"],
+    )
+    return (
+        knowledge_service.KnowledgeService(
+            store,
+            knowledge_space_id=binding["knowledge_space_id"],
+            extractor=knowledge_extractor(),
+        ),
+        binding,
+    )
+
+
+def knowledge_extractor() -> Any:
+    """The model-backed extractor, or None when no provider is configured.
+
+    The prompts come from the shared `wiki_prompts` module, so the local mode and
+    the shared mode ask the model the same question in the same words.
+    """
+
+    if not (os.environ.get("LLM_WIKI_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")):
+        return None
+    try:
+        import knowledge_pipeline
+        import wiki_prompts  # noqa: F401
+    except ImportError:
+        return None
+    roles = knowledge_pipeline.ModelRoles.from_mapping(
+        {"discovery": call_model, "reasoning": call_model, "grounding": call_model}
+    )
+    return knowledge_pipeline.artifact_extractor(roles)
+
+
+
+
+
+def knowledge_sources(root: Path, args: argparse.Namespace) -> list[dict[str, Any]]:
+    """The material to ingest, from explicit arguments or from the project tree."""
+
+    materials: list[dict[str, Any]] = []
+    for text in args.text or ():
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+        materials.append(
+            {
+                "source_id": f"text:{digest}",
+                "kind": "note",
+                "label": f"text {digest}",
+                "content": text,
+            }
+        )
+    for name in args.file or ():
+        path = Path(name).expanduser()
+        if not path.is_file():
+            raise WikiError(f"No such file: {path}")
+        record, reason = file_record(path, path.parent if path.parent != path else path)
+        if record is None:
+            raise WikiError(f"Cannot read {path}: {reason}")
+        materials.append(
+            {
+                "source_id": file_source_id(record["path"], record["sha256"]),
+                "kind": "file",
+                "label": record["path"],
+                "content": record["text"],
+            }
+        )
+    if args.from_tree:
+        records, skips = scan_tree(root)
+        for skip in skips:
+            print(f"skipped {skip['path']}: {skip['reason']}")
+        for relative, record in sorted(records.items()):
+            materials.append(
+                {
+                    "source_id": file_source_id(relative, record["sha256"]),
+                    "kind": "file",
+                    "label": relative,
+                    "content": record["text"],
+                    "source_time": None,
+                }
+            )
+    if not materials:
+        raise WikiError("Nothing to ingest. Pass --text, --file, or --from-tree.")
+    return materials
+
+
+def read_candidates(path: str) -> dict[str, Any]:
+    """Read an extraction file produced by the agent driving this skill.
+
+    `/lw` is used by an agent, and that agent is the model. Handing it the frozen
+    chunks and reading back its candidates is the offline path: no provider key, no
+    second model call, and the same validation as the configured-model path because
+    both end at the same change set.
+    """
+
+    document = read_json(Path(path).expanduser())
+    if not isinstance(document, dict) or document.get("schema_version") != 2:
+        raise WikiError(f"{path} is not a v2 candidates document.")
+    batches = document.get("batches")
+    if not isinstance(batches, dict):
+        raise WikiError(f"{path} must hold a 'batches' object keyed by source_id.")
+    return batches
+
+
+def candidates_extractor(path: str) -> Any:
+    batches = read_candidates(path)
+
+    def extract(context: dict[str, Any]) -> list[dict[str, Any]]:
+        source_id = context["source_id"]
+        entry = batches.get(source_id, {})
+        claims = entry.get("claims", [])
+        if not isinstance(claims, list):
+            raise WikiError(f"Candidates for {source_id} must be a list.")
+        known = set(context["evidence_ids"].values())
+        for claim in claims:
+            for origin in claim.get("origins", []):
+                unknown = [value for value in origin.get("evidence_refs", []) if value not in known]
+                if unknown:
+                    raise WikiError(
+                        f"Candidate for {source_id} cites evidence this run never registered: "
+                        + ", ".join(unknown)
+                    )
+        return claims
+
+    return extract
+
+
+def knowledge_extractor(candidates_path: str | None = None) -> Any:
+    """The extractor for this run, from the agent's file or the configured model."""
+
+    if candidates_path:
+        return candidates_extractor(candidates_path)
+    if not (os.environ.get("LLM_WIKI_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")):
+        return None
+    try:
+        import knowledge_pipeline
+        import wiki_prompts  # noqa: F401
+    except ImportError:
+        return None
+    roles = knowledge_pipeline.ModelRoles.from_mapping(
+        {"discovery": call_model, "reasoning": call_model, "grounding": call_model}
+    )
+    return knowledge_pipeline.artifact_extractor(roles)
+
+
+def knowledge_service_for(
+    root: Path, candidates_path: str | None = None
+) -> tuple[Any, dict[str, Any]]:
+    claim_store, knowledge_service = load_knowledge_modules()
+    binding = knowledge_binding(root)
+    store = claim_store.ClaimStore(
+        knowledge_home() / KNOWLEDGE_DB_NAME,
+        knowledge_space_id=binding["knowledge_space_id"],
+    )
+    return (
+        knowledge_service.KnowledgeService(
+            store,
+            knowledge_space_id=binding["knowledge_space_id"],
+            extractor=knowledge_extractor(candidates_path),
+        ),
+        binding,
+    )
+
+
+def do_knowledge_prepare(root: Path, args: argparse.Namespace) -> None:
+    """Print the frozen material an agent reads before it writes candidates.
+
+    Running this first is what makes the evidence ids in the candidates file the
+    real ones, so a candidate can only cite material that was actually frozen.
+    """
+
+    claim_store, knowledge_service = load_knowledge_modules()
+    from evidence import freeze_artifact, make_evidence, normalize_text  # noqa: F401
+    from chunking import artifact_structure, chunk_text  # noqa: F401
+
+    binding = knowledge_binding(root)
+    store = claim_store.ClaimStore(
+        knowledge_home() / KNOWLEDGE_DB_NAME,
+        knowledge_space_id=binding["knowledge_space_id"],
+    )
+    scope = knowledge_service.Scope.of(binding["knowledge_space_id"], binding["project_id"])
+    batches: dict[str, Any] = {}
+    for material in knowledge_sources(root, args):
+        revision = store.freeze_revision(
+            scope=scope,
+            source_id=material["source_id"],
+            source_type=material["kind"],
+            label=material["label"],
+            raw_content=material["content"],
+            source_time=material.get("source_time"),
+        )
+        text = normalize_text(material["content"])
+        artifact = freeze_artifact(
+            revision_id=revision["revision_id"],
+            text=text,
+            parser_name=chunking.PARSER_NAME,
+            parser_version=chunking.PARSER_VERSION,
+            config_hash=LW_CONFIG_HASH,
+            structure=artifact_structure(text),
+        )
+        chunks = chunk_text(artifact.normalized_text)
+        store.store_artifact(scope=scope, artifact=artifact, chunks=chunks)
+        evidence_ids: dict[str, str] = {}
+        for chunk in chunks:
+            record = make_evidence(
+                project_id=scope.project_id,
+                artifact=artifact,
+                spans=chunk.evidence(),
+                heading_path=chunk.heading_path,
+                label=chunk.chunk_id,
+            )
+            store.register_evidence(record, scope=scope)
+            evidence_ids[chunk.chunk_id] = record.evidence_id
+        batches[material["source_id"]] = {
+            "artifact_id": artifact.artifact_id,
+            "evidence_ids": evidence_ids,
+            "chunks": [
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "text": chunk.text,
+                    "heading_path": list(chunk.heading_path),
+                    "verbatim": chunk.verbatim,
+                    "render_recipe": chunk.render_recipe,
+                    "evidence_id": evidence_ids[chunk.chunk_id],
+                }
+                for chunk in chunks
+            ],
+            "history": [
+                {
+                    "claim_id": claim["claim_id"],
+                    "claim_version_id": claim["claim_version_id"],
+                    "statement": claim["statement"],
+                    "knowledge_kind": claim["knowledge_kind"],
+                }
+                for claim in store.iter_claims(scope)
+            ],
+            "existing_claims": len(store.iter_claims(scope)),
+        }
+    print(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "project_id": binding["project_id"],
+                "knowledge_space_id": binding["knowledge_space_id"],
+                "purpose": args.purpose,
+                "batches": batches,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    print(
+        "Fill each batch's 'claims' list and pass the file to "
+        "'knowledge-ingest --candidates FILE'.",
+        file=sys.stderr,
+    )
+
+
+def do_knowledge_ingest(root: Path, args: argparse.Namespace) -> None:
+    service, binding = knowledge_service_for(root, args.candidates)
+    materials = knowledge_sources(root, args)
+    report = service.ingest(
+        actor_subject=args.actor or os.environ.get("USER") or "local",
+        project_id=binding["project_id"],
+        source_inputs=materials,
+        base_version=service.store.current_version(binding["project_id"]),
+        idempotency_key=args.key or f"lw-{now_iso()}-{len(materials)}",
+        purpose=args.purpose,
+        run_id=args.run or f"run-{now_iso()}",
+        dry_run=args.dry_run,
+        config_hash=LW_CONFIG_HASH,
+    )
+    payload = report.as_dict()
+    print(
+        json.dumps(
+            {
+                "run_id": payload["run_id"],
+                "status": payload["status"],
+                "project_id": payload["project_id"],
+                "knowledge_version": payload["knowledge_version"],
+                "committed": payload["committed"],
+                "sources": payload["source_ids"],
+                "batches": len(payload["batches"]),
+                "unchanged_sources": payload["unchanged_sources"],
+                "commit": payload["commit"],
+                "candidates": len(payload["changeset"].get("claims", [])),
+                "review_pending": len(payload["changeset"].get("reviews", [])),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    if payload["status"] != "completed" and payload["status"] != "committed" and not payload["committed"]:
+        print(
+            f"run did not complete: {payload['status']}. No knowledge was committed.",
+            file=sys.stderr,
+        )
+
+
+def do_knowledge_status(root: Path, args: argparse.Namespace) -> None:
+    service, binding = knowledge_service_for(root)
+    status = service.status(binding["project_id"])
+    status["knowledge_database"] = str(knowledge_home() / KNOWLEDGE_DB_NAME)
+    status["raw_retention"] = "local database; nothing in this path is sent to a shared store"
+    print(json.dumps(status, ensure_ascii=False, indent=2))
+
+
+def do_knowledge_search(root: Path, args: argparse.Namespace) -> None:
+    service, binding = knowledge_service_for(root)
+    result = service.search(binding["project_id"], args.query, limit=max(1, args.limit))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def do_knowledge_evidence(root: Path, args: argparse.Namespace) -> None:
+    service, binding = knowledge_service_for(root)
+    print(
+        json.dumps(
+            service.evidence(binding["project_id"], args.evidence_id), ensure_ascii=False, indent=2
+        )
+    )
+
+
+def do_knowledge_claim(root: Path, args: argparse.Namespace) -> None:
+    service, binding = knowledge_service_for(root)
+    print(
+        json.dumps(
+            service.claim(binding["project_id"], args.claim_id, version=args.version),
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+def do_knowledge_explain(root: Path, args: argparse.Namespace) -> None:
+    service, binding = knowledge_service_for(root)
+    print(
+        json.dumps(
+            service.explain(
+                binding["project_id"], args.claim_id, mode=args.mode, max_depth=max(1, args.depth)
+            ),
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+def do_knowledge_reviews(root: Path, args: argparse.Namespace) -> None:
+    service, binding = knowledge_service_for(root)
+    print(
+        json.dumps(
+            {"reviews": service.open_reviews(binding["project_id"])}, ensure_ascii=False, indent=2
+        )
+    )
+
+
+def do_knowledge_review(root: Path, args: argparse.Namespace) -> None:
+    service, binding = knowledge_service_for(root)
+    result = service.review(
+        actor_subject=args.actor or os.environ.get("USER") or "local",
+        project_id=binding["project_id"],
+        review_id=args.review_id,
+        expected_version=args.expected_version,
+        action=args.action,
+        idempotency_key=args.key or f"review-{args.review_id}-{args.action}",
+        note=args.note or "",
+        edited_statement=args.statement,
+        topic_id=args.topic,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Maintain a project-local LLM Wiki.")
     sub = result.add_subparsers(dest="command", required=True)
@@ -975,6 +1434,46 @@ def parser() -> argparse.ArgumentParser:
     retrieve = command("context", "retrieve relevant wiki pages")
     retrieve.add_argument("query")
     retrieve.add_argument("--limit", type=int, default=5)
+
+    command("knowledge-init", "bind this project to the local knowledge space")
+    knowledge_ingest = command("knowledge-ingest", "freeze material and extract claims into the local knowledge store")
+    knowledge_ingest.add_argument("--text", action="append", help="material text; repeatable")
+    knowledge_ingest.add_argument("--file", action="append", help="material file; repeatable")
+    knowledge_ingest.add_argument("--from-tree", action="store_true", help="ingest every eligible project file")
+    knowledge_ingest.add_argument("--purpose", default="Capture durable project knowledge.")
+    knowledge_ingest.add_argument("--actor", help="authenticated actor subject")
+    knowledge_ingest.add_argument("--key", help="idempotency key")
+    knowledge_ingest.add_argument("--run", help="run id")
+    knowledge_ingest.add_argument("--candidates", help="JSON candidates file produced by the driving agent")
+    knowledge_ingest.add_argument("--dry-run", action="store_true", help="freeze and report without committing")
+    knowledge_prepare = command("knowledge-prepare", "freeze material and print the chunks an agent reads before writing candidates")
+    knowledge_prepare.add_argument("--text", action="append", help="material text; repeatable")
+    knowledge_prepare.add_argument("--file", action="append", help="material file; repeatable")
+    knowledge_prepare.add_argument("--from-tree", action="store_true", help="ingest every eligible project file")
+    knowledge_prepare.add_argument("--purpose", default="Capture durable project knowledge.")
+    command("knowledge-status", "show knowledge version, claim counts and open reviews")
+    knowledge_search = command("knowledge-search", "search pages and claims in this project")
+    knowledge_search.add_argument("query")
+    knowledge_search.add_argument("--limit", type=int, default=10)
+    knowledge_evidence = command("knowledge-evidence", "recover the exact source text behind a citation")
+    knowledge_evidence.add_argument("evidence_id")
+    knowledge_claim = command("knowledge-claim", "show one claim with its origins and history")
+    knowledge_claim.add_argument("claim_id")
+    knowledge_claim.add_argument("--version", type=int)
+    knowledge_explain = command("knowledge-explain", "show why a claim is held")
+    knowledge_explain.add_argument("claim_id")
+    knowledge_explain.add_argument("--mode", default="why")
+    knowledge_explain.add_argument("--depth", type=int, default=3)
+    command("knowledge-reviews", "list open reviews")
+    knowledge_review = command("knowledge-review", "record a review decision")
+    knowledge_review.add_argument("review_id")
+    knowledge_review.add_argument("--action", required=True)
+    knowledge_review.add_argument("--expected-version", required=True)
+    knowledge_review.add_argument("--note", default="")
+    knowledge_review.add_argument("--statement", help="new wording, for action=edit")
+    knowledge_review.add_argument("--topic", help="topic id, for action=confirm_identity")
+    knowledge_review.add_argument("--actor")
+    knowledge_review.add_argument("--key")
     return result
 
 
@@ -1013,7 +1512,28 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "context":
             require_wiki(root)
             context(root, args.query, max(1, args.limit))
-    except (WikiError, OSError) as exc:
+        elif args.command == "knowledge-init":
+            binding = knowledge_binding(root)
+            print(json.dumps({**binding, "knowledge_database": str(knowledge_home() / KNOWLEDGE_DB_NAME)}, ensure_ascii=False, indent=2))
+        elif args.command == "knowledge-prepare":
+            do_knowledge_prepare(root, args)
+        elif args.command == "knowledge-ingest":
+            do_knowledge_ingest(root, args)
+        elif args.command == "knowledge-status":
+            do_knowledge_status(root, args)
+        elif args.command == "knowledge-search":
+            do_knowledge_search(root, args)
+        elif args.command == "knowledge-evidence":
+            do_knowledge_evidence(root, args)
+        elif args.command == "knowledge-claim":
+            do_knowledge_claim(root, args)
+        elif args.command == "knowledge-explain":
+            do_knowledge_explain(root, args)
+        elif args.command == "knowledge-reviews":
+            do_knowledge_reviews(root, args)
+        elif args.command == "knowledge-review":
+            do_knowledge_review(root, args)
+    except (WikiError, OSError, *knowledge_error_types()) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0

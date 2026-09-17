@@ -140,20 +140,21 @@ class SkillDistributionTests(unittest.TestCase):
                 imported = set()
                 for line in canonical.read_text(encoding="utf-8").splitlines():
                     stripped = line.strip()
+                    module = ""
                     if stripped.startswith("import "):
-                        imported.add(stripped[len("import "):].split()[0].split(".")[0])
+                        module = stripped[len("import "):].split()[0]
                     elif stripped.startswith("from ") and " import " in stripped:
                         module = stripped[len("from "):].split(" import ")[0].strip()
-                        # A relative import names a vendored sibling, which
-                        # travels with this file, so it is not a dependency.
-                        if module.startswith("."):
-                            continue
-                        root = module.split(".")[0]
-                        # A sibling that is vendored alongside this file travels
-                        # with it, so it is not an external dependency either.
-                        if root in siblings:
-                            continue
-                        imported.add(root)
+                    if not module:
+                        continue
+                    # A relative import, and a vendored sibling imported flat so it
+                    # works without a package, both travel with this file.
+                    if module.startswith("."):
+                        continue
+                    root = module.split(".")[0]
+                    if root in siblings:
+                        continue
+                    imported.add(root)
                 self.assertEqual(
                     sorted(imported - allowed),
                     [],

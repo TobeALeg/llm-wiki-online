@@ -1,0 +1,218 @@
+def read_candidates(path: str) -> dict[str, Any]:
+    """Read an extraction file produced by the agent driving this skill.
+
+    `/lw` is used by an agent, and that agent is the model. Handing it the frozen
+    chunks and reading back its candidates is the offline path: no provider key, no
+    second model call, and the same validation as the configured-model path because
+    both end at the same change set.
+    """
+
+    document = read_json(Path(path).expanduser())
+    if not isinstance(document, dict) or document.get("schema_version") != 2:
+        raise WikiError(f"{path} is not a v2 candidates document.")
+    batches = document.get("batches")
+    if not isinstance(batches, dict):
+        raise WikiError(f"{path} must hold a 'batches' object keyed by source_id.")
+    return batches
+
+
+def candidates_extractor(path: str) -> Any:
+    batches = read_candidates(path)
+
+    def extract(context: dict[str, Any]) -> list[dict[str, Any]]:
+        source_id = context["source_id"]
+        entry = batches.get(source_id, {})
+        claims = entry.get("claims", [])
+        if not isinstance(claims, list):
+            raise WikiError(f"Candidates for {source_id} must be a list.")
+        known = set(context["evidence_ids"].values())
+        for claim in claims:
+            for origin in claim.get("origins", []):
+                unknown = [value for value in origin.get("evidence_refs", []) if value not in known]
+                if unknown:
+                    raise WikiError(
+                        f"Candidate for {source_id} cites evidence this run never registered: "
+                        + ", ".join(unknown)
+                    )
+        return claims
+
+    return extract
+
+
+def knowledge_extractor(candidates_path: str | None = None) -> Any:
+    """The extractor for this run, from the agent's file or the configured model."""
+
+    if candidates_path:
+        return candidates_extractor(candidates_path)
+    if not (os.environ.get("LLM_WIKI_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")):
+        return None
+    try:
+        import knowledge_pipeline
+        import wiki_prompts  # noqa: F401
+    except ImportError:
+        return None
+    roles = knowledge_pipeline.ModelRoles.from_mapping(
+        {"discovery": call_model, "reasoning": call_model, "grounding": call_model}
+    )
+    return knowledge_pipeline.artifact_extractor(roles)
+
+
+def knowledge_service_for(
+    root: Path, candidates_path: str | None = None
+) -> tuple[Any, dict[str, Any]]:
+    claim_store, knowledge_service = load_knowledge_modules()
+    binding = knowledge_binding(root)
+    store = claim_store.ClaimStore(
+        knowledge_home() / KNOWLEDGE_DB_NAME,
+        knowledge_space_id=binding["knowledge_space_id"],
+    )
+    return (
+        knowledge_service.KnowledgeService(
+            store,
+            knowledge_space_id=binding["knowledge_space_id"],
+            extractor=knowledge_extractor(candidates_path),
+        ),
+        binding,
+    )
+
+
+def do_knowledge_prepare(root: Path, args: argparse.Namespace) -> None:
+    """Print the frozen material an agent reads before it writes candidates.
+
+    Running this first is what makes the evidence ids in the candidates file the
+    real ones, so a candidate can only cite material that was actually frozen.
+    """
+
+    claim_store, knowledge_service = load_knowledge_modules()
+    from evidence import freeze_artifact, make_evidence, normalize_text  # noqa: F401
+    from chunking import artifact_structure, chunk_text  # noqa: F401
+
+    binding = knowledge_binding(root)
+    store = claim_store.ClaimStore(
+        knowledge_home() / KNOWLEDGE_DB_NAME,
+        knowledge_space_id=binding["knowledge_space_id"],
+    )
+    scope = knowledge_service.Scope.of(binding["knowledge_space_id"], binding["project_id"])
+    batches: dict[str, Any] = {}
+    for material in knowledge_sources(root, args):
+        revision = store.freeze_revision(
+            scope=scope,
+            source_id=material["source_id"],
+            source_type=material["kind"],
+            label=material["label"],
+            raw_content=material["content"],
+            source_time=material.get("source_time"),
+        )
+        text = normalize_text(material["content"])
+        artifact = freeze_artifact(
+            revision_id=revision["revision_id"],
+            text=text,
+            parser_name=chunking.PARSER_NAME,
+            parser_version=chunking.PARSER_VERSION,
+            config_hash="lw-cli",
+            structure=artifact_structure(text),
+        )
+        chunks = chunk_text(artifact.normalized_text)
+        store.store_artifact(scope=scope, artifact=artifact, chunks=chunks)
+        evidence_ids: dict[str, str] = {}
+        for chunk in chunks:
+            record = make_evidence(
+                project_id=scope.project_id,
+                artifact=artifact,
+                spans=chunk.evidence(),
+                heading_path=chunk.heading_path,
+                label=chunk.chunk_id,
+            )
+            store.register_evidence(record, scope=scope)
+            evidence_ids[chunk.chunk_id] = record.evidence_id
+        batches[material["source_id"]] = {
+            "artifact_id": artifact.artifact_id,
+            "evidence_ids": evidence_ids,
+            "chunks": [
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "text": chunk.text,
+                    "heading_path": list(chunk.heading_path),
+                    "verbatim": chunk.verbatim,
+                    "render_recipe": chunk.render_recipe,
+                    "evidence_id": evidence_ids[chunk.chunk_id],
+                }
+                for chunk in chunks
+            ],
+            "history": [
+                {
+                    "claim_id": claim["claim_id"],
+                    "claim_version_id": claim["claim_version_id"],
+                    "statement": claim["statement"],
+                    "knowledge_kind": claim["knowledge_kind"],
+                }
+                for claim in store.iter_claims(scope)
+            ],
+            "existing_claims": len(store.iter_claims(scope)),
+        }
+    print(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "project_id": binding["project_id"],
+                "knowledge_space_id": binding["knowledge_space_id"],
+                "purpose": args.purpose,
+                "batches": batches,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    print(
+        "Fill each batch's 'claims' list and pass the file to "
+        "'knowledge-ingest --candidates FILE'.",
+        file=sys.stderr,
+    )
+
+
+def do_knowledge_ingest(root: Path, args: argparse.Namespace) -> None:
+    service, binding = knowledge_service_for(root, args.candidates)
+    materials = knowledge_sources(root, args)
+    report = service.ingest(
+        actor_subject=args.actor or os.environ.get("USER") or "local",
+        project_id=binding["project_id"],
+        source_inputs=materials,
+        base_version=service.store.current_version(binding["project_id"]),
+        idempotency_key=args.key or f"lw-{now_iso()}-{len(materials)}",
+        purpose=args.purpose,
+        run_id=args.run or f"run-{now_iso()}",
+        dry_run=args.dry_run,
+    )
+    payload = report.as_dict()
+    print(
+        json.dumps(
+            {
+                "run_id": payload["run_id"],
+                "status": payload["status"],
+                "project_id": payload["project_id"],
+                "knowledge_version": payload["knowledge_version"],
+                "committed": payload["committed"],
+                "sources": payload["source_ids"],
+                "batches": len(payload["batches"]),
+                "unchanged_sources": payload["unchanged_sources"],
+                "commit": payload["commit"],
+                "candidates": len(payload["changeset"].get("claims", [])),
+                "review_pending": len(payload["changeset"].get("reviews", [])),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    if payload["status"] != "completed" and payload["status"] != "committed" and not payload["committed"]:
+        print(
+            f"run did not complete: {payload['status']}. No knowledge was committed.",
+            file=sys.stderr,
+        )
+
+
+def do_knowledge_status(root: Path, args: argparse.Namespace) -> None:
+    service, binding = knowledge_service_for(root)
+    status = service.status(binding["project_id"])
+    status["knowledge_database"] = str(knowledge_home() / KNOWLEDGE_DB_NAME)
+    status["raw_retention"] = "local database; nothing in this path is sent to a shared store"
+    print(json.dumps(status, ensure_ascii=False, indent=2))
