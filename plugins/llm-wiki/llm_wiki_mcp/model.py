@@ -7,7 +7,7 @@ import os
 import re
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Mapping
 
 from .core import MAX_OUTPUT_CHARS, Model
 from .model_roles import resolve_model, stage_record, usage_from_response
@@ -16,6 +16,22 @@ from .wiki_prompts import PROMPT_VERSIONS, build_request
 
 class ModelError(RuntimeError):
     """A model-provider failure without request or response content."""
+
+
+ROLE_REQUEST_MARKERS = ("role", "output_contract")
+"""A v2 role request names its role and states its own output contract.
+
+Both have to be present. `payload` for a v1 submit carries neither, and a v1 route
+payload carries a `phase` but no role, so neither is mistaken for a role request.
+"""
+
+
+def is_role_request(payload: Any) -> bool:
+    """Whether this payload is already a shaped v2 role request."""
+
+    if not isinstance(payload, Mapping):
+        return False
+    return all(marker in payload for marker in ROLE_REQUEST_MARKERS)
 
 
 def configured_model() -> Model:
@@ -30,7 +46,14 @@ def _call_model(payload: dict[str, Any], purpose: str, existing_pages: list[dict
     role = str(payload.get("role") or "default")
     resolved = resolve_model(role, os.environ)
     model = resolved["model"]
-    request_object = build_request(purpose, payload, existing_pages, phase=payload.get("phase"))
+    if is_role_request(payload):
+        # A v2 role request is already shaped by `wiki_prompts.build_role_request`
+        # and carries its own output contract. Re-shaping it through the v1 merge
+        # builder would nest it under `evidence` and demand `pages` back, so the
+        # model would be answering two contradictory contracts at once.
+        request_object = dict(payload)
+    else:
+        request_object = build_request(purpose, payload, existing_pages, phase=payload.get("phase"))
     body = json.dumps({
         "model": model,
         "messages": [

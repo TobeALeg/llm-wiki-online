@@ -1,4 +1,5 @@
 import importlib.util
+import re
 import json
 import os
 import tempfile
@@ -30,6 +31,19 @@ def long_document(paragraphs=40, width=1_000):
     ]
     blocks.append("Tail: the delivery date is 2026-09-30.")
     return "\n\n".join(blocks) + "\n"
+
+
+UPDATED_AT = re.compile(r"^updated_at: .*$", re.M)
+
+
+def knowledge_of(text):
+    """A page's content without the time it was written.
+
+    `updated_at` is a second-resolution stamp, so two otherwise identical renders can
+    differ in it. Dropping that one line is what lets a test compare what a page says.
+    """
+
+    return UPDATED_AT.sub("updated_at: <time>", text)
 
 
 def page(slug, source, marker="recording"):
@@ -889,7 +903,23 @@ class ResumeEvidenceTests(WikiIngestTestCase):
                 wiki.do_update(self.root, args())
 
         final = (self.pages_dir / "delivery-plan.md").read_text(encoding="utf-8")
-        self.assertEqual(final, baseline, "the retry produces the same page as one clean run")
+        # The front matter records the update time at second resolution, so two runs
+        # a second apart differ there by design. Comparing it would test the clock
+        # rather than what this case is about, which is whether the evidence from the
+        # batches that finished before the failure reached the final page.
+        self.assertEqual(
+            knowledge_of(final),
+            knowledge_of(baseline),
+            "the retry produces the same page knowledge as one clean run",
+        )
+        for text in (baseline, final):
+            self.assertTrue(
+                any(
+                    line.startswith('updated_at: "') and "T" in line
+                    for line in text.splitlines()
+                ),
+                "the page still records when it was written",
+            )
 
 
 if __name__ == "__main__":

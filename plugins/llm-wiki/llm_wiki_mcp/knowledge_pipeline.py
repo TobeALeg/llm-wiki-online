@@ -834,6 +834,22 @@ def validate_changes(
     withdrawn = {str(value) for value in snapshot.get("withdrawn") or ()}
 
     raw_candidates, batch_forged, batch_problems = _split_batch(candidate_batch)
+
+    # A snapshot missing the frozen material would reject every citation as
+    # unsupported, which looks like a strict gate and is really a misconfigured
+    # call. Saying so is the difference between a caller fixing their snapshot and
+    # a caller concluding their material cannot be cited.
+    cites_anything = any(
+        getattr(_coerce_candidate(item), "evidence_refs", ()) or ()
+        for item in raw_candidates
+        if isinstance(item, Mapping) and "statement" in item
+    )
+    if cites_anything and not records:
+        raise KnowledgeError(
+            "The snapshot carries no evidence records, so no citation in this batch can be "
+            "resolved. Pass the prepared run's evidence and artifacts with the snapshot.",
+            code="INVALID_SNAPSHOT",
+        )
     claims: list[dict[str, Any]] = []
     relations: list[dict[str, Any]] = []
     reviews: list[dict[str, Any]] = []
@@ -917,6 +933,12 @@ def validate_changes(
                 ))
 
         joined = "\n".join(texts.values())
+        if joined and "adoption_record" in candidate.state.required_support() and adoption_markers(joined):
+            # A decision the material records in its own voice is the adoption record.
+            # Dropped only when the cited text actually carries a marker, so a
+            # proposal stays a proposal.
+            found = [item for item in found if item[0] != RejectionCode.FABRICATED_ADOPTION]
+            support.add("adoption_record")
         if joined:
             missing = _missing_qualifiers(candidate, joined)
             if missing:
@@ -948,6 +970,40 @@ def validate_changes(
 
         if found:
             ordered = _ordered(found)
+            codes = {code for code, _detail in ordered}
+            if codes == {RejectionCode.MISSING_QUALIFIER} and texts:
+                # The extraction is faithful but its scope is wrong: the material
+                # qualifies the statement and the candidate does not carry it.
+                # Publishing it unconditionally would be wrong, and discarding it
+                # loses a constraint the project stated, so a person decides. The
+                # spec asks for a repair first; with no repair available this is the
+                # outcome that keeps the knowledge instead of dropping it.
+                qualifiers = "; ".join(
+                    detail.split("with ", 1)[-1]
+                    for code, detail in ordered
+                    if code == RejectionCode.MISSING_QUALIFIER
+                )
+                reviews.append(
+                    {
+                        "review_id": _mint("revq", run_id, index, candidate.statement),
+                        "subject_kind": "candidate",
+                        "subject_id": candidate.statement[:120],
+                        "subject_version": "",
+                        "question": (
+                            "这条候选遗漏了原文的限定，应该按原文补上限定后保留，还是按当前措辞发布？"
+                            "原文限定：" + qualifiers
+                        ),
+                        "trigger_code": RejectionCode.MISSING_QUALIFIER,
+                        "candidates": {
+                            "statement": candidate.statement,
+                            "conditions": list(candidate.conditions),
+                            "knowledge_kind": candidate.state.knowledge_kind,
+                        },
+                        "evidence_refs": list(candidate.evidence_refs),
+                        "impact": {"drops_if_rejected": True, "publication_blocked": True},
+                    }
+                )
+                continue
             rejected.append({
                 "index": index,
                 "batch_id": candidate.batch_id,
@@ -2100,7 +2156,21 @@ def _split_batch(candidate_batch: Any) -> tuple[list[Any], list[str], list[str]]
             raw = candidate_batch.get("candidates")
             if not isinstance(raw, (list, tuple)):
                 return [], [], ["the batch's candidates field is not a list"]
-            tolerated = {"candidates", "note", "batch_id", "run_id", "source_ids", "purpose"}
+            # The keys this pipeline puts on its own candidate batch are tolerated,
+            # because validating that batch is the normal call. A key nothing here
+            # reads is what the forged-identifier check is for.
+            tolerated = {
+                "candidates",
+                "note",
+                "batch_id",
+                "run_id",
+                "source_ids",
+                "purpose",
+                "batches",
+                "unfinished",
+                "status",
+                "attempts",
+            }
             forged = sorted(str(key) for key in candidate_batch if str(key) not in tolerated)
             return list(raw), forged, []
         if "statement" in candidate_batch:
@@ -2169,6 +2239,27 @@ def _support_names(snapshot: Mapping[str, Any], evidence_refs: Sequence[str]) ->
             if container is True or refs & {str(value) for value in container}:
                 available.add(name)
     return available
+
+
+ADOPTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("决定", re.compile(r"(?:决定|已定|定了|敲定|拍板|采用|采纳|通过)")),
+    ("decided", re.compile(r"(?:decided|agreed|adopted|approved|settled on)", re.I)),
+)
+"""Wording that records a decision as taken rather than proposed.
+
+A decision the project recorded in its own voice is adoption evidence, and the
+material is the record. Without this the gate could never accept `adopted` on
+material that says "决定...", which is the commonest way a real meeting note states
+a decision, and every decision would arrive as a proposal.
+"""
+
+
+def adoption_markers(text: str) -> list[str]:
+    """Which adoption markers the material carries, if any."""
+
+    if not text:
+        return []
+    return [name for name, pattern in ADOPTION_PATTERNS if pattern.search(text)]
 
 
 def _mint(prefix: str, *parts: Any) -> str:
