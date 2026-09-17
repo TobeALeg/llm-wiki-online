@@ -67,12 +67,21 @@ def check_key(loaded: dict) -> int:
     return 0
 
 
-def check_gold() -> int:
+def check_gold(path: Path | None = None) -> int:
     manifest = load_manifest()
-    units = metrics.load_gold(HERE / "gold.jsonl")
+    target = path or (HERE / "gold.jsonl")
+    units = metrics.load_gold(target)
     summary = metrics.split_counts(units, manifest)
 
+    statuses = summary["label_statuses"]
+    confirmed = "human_confirmed" in statuses
+    print(f"label file: {target.name}")
     print(f"gold units: {len(units)}")
+    if not confirmed:
+        print(
+            "none of these units is human_confirmed, so the numbers below describe the "
+            "label set's size and not a quality result"
+        )
     print(f"label statuses present: {', '.join(summary['label_statuses'])}")
     print()
     print(f"{'minimum':<28}{'have':>6}{'need':>6}")
@@ -160,6 +169,10 @@ def run_once(*, split: str, materials: list[dict], run_id: str, destination: Pat
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--check-gold", action="store_true", help="report gold coverage against the manifest")
+    parser.add_argument(
+        "--gold",
+        help="which label file to measure; defaults to gold.jsonl, pass gold.draft.jsonl for the drafts",
+    )
     parser.add_argument("--check-key", action="store_true", help="report which credential was found and where")
     parser.add_argument("--split", default="holdout", choices=("dev", "holdout"))
     parser.add_argument("--runs", type=int, default=3)
@@ -174,7 +187,7 @@ def main() -> int:
         return check_key(loaded)
 
     if arguments.check_gold:
-        return check_gold()
+        return check_gold(Path(arguments.gold).expanduser() if arguments.gold else None)
 
     manifest = load_manifest()
     units = metrics.load_gold(HERE / "gold.jsonl")

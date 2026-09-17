@@ -46,6 +46,7 @@
     "split",
     "project_id",
     "must_keep",
+    "kind",
     "expected_meaning",
     "required_qualifiers",
     "forbidden_assertions",

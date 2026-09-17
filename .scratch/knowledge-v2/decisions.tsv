@@ -45,3 +45,12 @@ ts	phase	decision	why	evidence	result
 2026-09-17T18:10:00Z	realrun	发现否定检测把疑问句与「材料包含该句」都读成否认	会不会是 A-not-A 疑问形式，尚未签署否定的是签署而不是前一句陈述；词距分不开，包含关系可以	ANOT_A_RE 与 _denial 的包围检查	两个方向各三条用例全部正确
 2026-09-17T18:20:00Z	realrun	限定词检查保留材料级广度，放弃收窄到句子	尝试收窄后 K04 的负例会被发布成普适结论，而失败方向不可接受；同主题不同谓述无法用词面分开	tests/test_knowledge_extraction.py::QualifierTests	代价是同主题误报走 REVIEW 而非丢弃，已记录为未关闭项
 2026-09-17T18:30:00Z	realrun	真机探针最终结果：六组语料中五组零容忍边界全部成立	剩下的 qualifiers 全部进 REVIEW 没有发布，根因是规格 §4.3 要求的语义修复未实现	.scratch/knowledge-v2/real-probe-final.json	边界成立 5/6，未关闭项已写进发布报告 5.1 节
+2026-09-18T01:00:00Z	corpus	语料改用材料目录构建，仓库只留路径与哈希	私有材料正文进仓库会让每次 clone 都成为它的副本；哈希可以在材料变动时报警	evals/knowledge_v2/corpus.json	35 组，29 真实，25 dev / 10 holdout，--verify 通过
+2026-09-18T01:05:00Z	corpus	工具自动发现重复与部分导出的关系	BPv1.2 与 v1.3 字节相同、v1.4-4 是 v1.4 的前缀，而血缘与内容指纹规则针对的正是这两种情形	build_corpus.find_relations	两处关系由文件本身算出，不靠人记
+2026-09-18T01:10:00Z	screen	语料构建时读一遍正文找凭据形态	路径规则抓不到写在设计笔记中间的 key；筛查结果写进 corpus.json 才叫证据	screen_material.py + corpus.screening	植入形态全部命中、占位示例降级；语料 35 文件 0 匹配
+2026-09-18T01:12:00Z	screen	修掉 v1 凭据路径规则漏斜杠：src/ai-service/credentials.ts 会被读入	分隔符集合是 ^ . _ - 而没有 /，于是 credentials.ts 被跳过而下层目录里的同名文件被读，方向最危险	skills/lw/scripts/wiki.py 的 SECRET_PATTERNS	规则 fail closed，加测试与工具一致性断言
+2026-09-18T01:14:00Z	screen	筛查器用植入样本自测	0 匹配也可能是规则失效；不先证明仪器能工作，0 匹配毫无意义	10 种植入形态	全部命中，含 URL 内嵌凭据与私钥块
+2026-09-18T01:30:00Z	draft	草稿一律 draft_unconfirmed 并写明哪些字段是机器推导的	expected_meaning 抄自模型自己的 statement，拿它打分等于让模型自己判卷	draft_gold.py::draft_unit	266 条草稿，run_eval 仍拒绝出质量报告
+2026-09-18T01:40:00Z	draft	发现待审问题是英文而材料是中文，改为按被审命题的语言选模板	问题正是人要照着做判断的东西；反过来英文项目也会遇到镜像问题	knowledge_pipeline.review_question	两种语言各一份，报告渲染时按 trigger_code 取，不必重跑模型
+2026-09-18T01:45:00Z	draft	发现模型把步骤名写进 depends_on 时裸 ValueError 打掉整次运行	没有调用方把裸 ValueError 当契约错误接住；一个格式错误的步骤不该终止整轮	knowledge_types._step_number	数字或数字文本接受，其余以 INVALID_ATTRIBUTES 具名拒绝
+2026-09-18T01:52:00Z	draft	商业计划五组跑完：266 条草稿，REVIEW 18.8%	这批材料的价值在于版本链，v1.0 到 v1.4 覆盖决定被修正与推翻的真实情形	reports/knowledge-v2/draft/*.md	发布 148、拒绝 59、丢弃 9、待审 50；决策/约束类只有 7 条
