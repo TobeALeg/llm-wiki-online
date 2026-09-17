@@ -118,9 +118,17 @@ def position_index(prepared: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     return index
 
 
-def cited_text(candidate: Mapping[str, Any], positions: Mapping[str, dict[str, Any]]) -> str:
+def field(source: Any, name: str, default: Any = None) -> Any:
+    """Read one value from either shape the pipeline hands back."""
+
+    if isinstance(source, Mapping):
+        return source.get(name, default)
+    return getattr(source, name, default)
+
+
+def cited_text(candidate: Any, positions: Mapping[str, dict[str, Any]]) -> str:
     parts: list[str] = []
-    for reference in candidate.get("evidence_refs") or ():
+    for reference in field(candidate, "evidence_refs") or ():
         found = positions.get(str(reference))
         if found:
             parts.append(found["text"])
@@ -140,9 +148,17 @@ def draft_unit(
 ) -> dict[str, Any]:
     """One draft unit, with the derived fields named as derived."""
 
-    state = candidate.get("state") or {}
+    raw_state = field(candidate, "state")
+    if isinstance(raw_state, Mapping):
+        state = dict(raw_state)
+    else:
+        state = {
+            "knowledge_kind": field(raw_state, "knowledge_kind"),
+            "decision_state": field(raw_state, "decision_state"),
+            "epistemic_status": field(raw_state, "epistemic_status"),
+        }
     kind = str(state.get("knowledge_kind") or "fact")
-    statement = str(candidate.get("statement") or "")
+    statement = str(field(candidate, "statement") or "")
     text = cited_text(candidate, positions)
     derived_qualifiers = qualifiers_in(text)
     adoption = knowledge_pipeline.adoption_markers(text)
@@ -158,13 +174,13 @@ def draft_unit(
         forbidden.append("该判断已验证或已成事实")
         notes.append("forbidden_assertions 由 hypothesis 推导")
     for qualifier in derived_qualifiers:
-        carrying = qualifier in statement or qualifier in " ".join(candidate.get("conditions") or ())
+        carrying = qualifier in statement or qualifier in " ".join(field(candidate, "conditions") or ())
         if not carrying:
             forbidden.append(f"无条件成立（材料限定：{qualifier}）")
             notes.append(f"材料含限定 {qualifier}，候选未带，已记入 forbidden")
 
     targets = []
-    for reference in candidate.get("evidence_refs") or ():
+    for reference in field(candidate, "evidence_refs") or ():
         found = positions.get(str(reference))
         if found:
             targets.append(
@@ -274,9 +290,7 @@ def run_group(corpus: Mapping[str, Any], root: Path, group: Mapping[str, Any]) -
 
     units: list[dict[str, Any]] = []
     index = 0
-    by_statement = {
-        str(candidate.get("statement")): candidate for candidate in batch["candidates"]
-    }
+    by_statement = {str(field(candidate, "statement")): candidate for candidate in batch["candidates"]}
     for claim in validated["changeset"]["claims"]:
         index += 1
         units.append(

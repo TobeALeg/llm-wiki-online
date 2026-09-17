@@ -424,6 +424,25 @@ class ClaimVersionState:
             raise KnowledgeError("valid_to precedes valid_from.", code="INVALID_STATE")
 
 
+def _step_number(value: Any, field_name: str) -> int:
+    """A step number, refusing a value that is not one.
+
+    A model that writes a step's name into `depends_on` used to reach `int()` and
+    raise a bare `ValueError`, which no caller catches as a contract error and which
+    took down the whole run over one malformed step. A digit written as text is
+    accepted, because that is the same number.
+    """
+
+    if isinstance(value, bool) or value is None:
+        raise KnowledgeError(f"{field_name} must be a number; got {value!r}.", code="INVALID_ATTRIBUTES")
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if text.isdigit():
+        return int(text)
+    raise KnowledgeError(f"{field_name} must be a number; got {value!r}.", code="INVALID_ATTRIBUTES")
+
+
 def validate_attributes(knowledge_kind: str, attributes: Mapping[str, Any] | None) -> dict[str, Any]:
     """Validate the kind-specific payload, and keep unknown keys out of the claim.
 
@@ -444,13 +463,16 @@ def validate_attributes(knowledge_kind: str, attributes: Mapping[str, Any] | Non
             if not isinstance(step, Mapping):
                 raise KnowledgeError("Each process step must be an object.", code="INVALID_ATTRIBUTES")
             cleaned.append({
-                "order": int(step.get("order", index)),
+                "order": _step_number(step.get("order", index), "process step order"),
                 "action": _text(step.get("action"), "process step action", max_chars=2_000),
                 "inputs": _text_list(step.get("inputs"), "process step inputs"),
                 "outputs": _text_list(step.get("outputs"), "process step outputs"),
                 "preconditions": _text_list(step.get("preconditions"), "process step preconditions"),
                 "exceptions": _text_list(step.get("exceptions"), "process step exceptions"),
-                "depends_on": [int(value) for value in step.get("depends_on", []) or []],
+                "depends_on": [
+                    _step_number(value, "process step depends_on")
+                    for value in step.get("depends_on", []) or []
+                ],
             })
         orders = [step["order"] for step in cleaned]
         if len(set(orders)) != len(orders):

@@ -20,6 +20,20 @@
     "holdout_synthesis_target": 5,
     "holdout_future_questions": 10
   },
+  "corpus": {
+    "source": "evals/knowledge_v2/corpus.json",
+    "built_by": "python evals/knowledge_v2/build_corpus.py --material-root <dir> --write",
+    "verified_by": "python evals/knowledge_v2/build_corpus.py --material-root <dir> --verify",
+    "screened_by": "python evals/knowledge_v2/screen_material.py --root <dir>",
+    "material_text_in_repo": false,
+    "screening_rule": "语料里每个文件都读过一遍找凭据形态；结果写在 corpus.json 的 screening 字段，clean 为 true 才表示没有人需要先看一眼。路径规则单独排除按名字就危险的文件。"
+  },
+  "draft_labels": {
+    "source": "evals/knowledge_v2/gold.draft.jsonl",
+    "built_by": "python evals/knowledge_v2/draft_gold.py --material-root <dir> --write",
+    "review_surface": "reports/knowledge-v2/draft/<group_id>.md",
+    "rule": "草稿一律 draft_unconfirmed，且写明哪些字段是机器从材料推导的。expected_meaning 抄自模型自己的 statement，因此它不是标注；拿它对模型打分等于让模型给自己判卷。"
+  },
   "grouping_rules": [
     "同一对话链、同源改写或紧密相关版本放在同一分区，避免一条推导链一半进 dev、一半进 holdout。",
     "holdout 不出现在提示词示例或模型调试记录里。",
