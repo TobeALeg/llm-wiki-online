@@ -1150,8 +1150,18 @@ class ReviewActionTests(ClaimStoreTestCase):
                     before[claim_id]["selected_version"][axis], after[claim_id]["selected_version"][axis]
                 )
             self.assertEqual(before[claim_id]["current_version_id"], after[claim_id]["current_version_id"])
-        retained_rows = [row for row in self.items("stage_artifacts") if row["stage"] == "review_retain"]
-        self.assertEqual([True, True, True], [json.loads(row["output_json"])["retained"] for row in retained_rows])
+        # Retention is recorded on the review decision itself, which is the durable
+        # audit for a review action and carries the actor alongside the outcome.
+        retained_rows = [
+            row for row in self.items("review_decisions") if row["action"] == "retain"
+        ]
+        self.assertEqual(3, len(retained_rows))
+        self.assertEqual(
+            [True, True, True], [json.loads(row["result_json"])["retained"] for row in retained_rows]
+        )
+        self.assertEqual(
+            {"actor-bob"}, {row["actor_subject"] for row in retained_rows}
+        )
 
         self.commit(
             "v01-adopt-review",

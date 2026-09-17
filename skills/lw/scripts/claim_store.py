@@ -89,6 +89,7 @@ IDEMPOTENCY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 ACTOR_LIMIT = 240
 
 V2_TABLES = (
+    "dispositions",
     "knowledge_projects",
     "knowledge_submissions",
     "sources",
@@ -529,6 +530,19 @@ CREATE TABLE IF NOT EXISTS run_items (
     attempts INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (run_id, batch_id)
 );
+
+CREATE TABLE IF NOT EXISTS dispositions (
+    disposition_id TEXT PRIMARY KEY,
+    knowledge_space_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    run_id TEXT NOT NULL DEFAULT '',
+    unit_id TEXT NOT NULL,
+    statement TEXT NOT NULL,
+    disposition TEXT NOT NULL,
+    reason_codes_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS dispositions_project ON dispositions(project_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS stage_artifacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1424,12 +1438,23 @@ class ClaimStore:
 
         dropped = changeset.get("dropped", [])
         for item in dropped:
+            # A drop is a decision about knowledge, so it is recorded here rather
+            # than against a run. Writing it against a run that was never
+            # registered made the whole commit fail its foreign key.
             db.execute(
-                "INSERT INTO stage_artifacts(run_id, stage, input_fingerprint, prompt_version, model_id, output_json, created_at) VALUES (?, 'value_gate_drop', ?, '', '', ?, ?)",
+                """INSERT OR REPLACE INTO dispositions(
+                       disposition_id, knowledge_space_id, project_id, run_id, unit_id,
+                       statement, disposition, reason_codes_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
+                    new_id("dsp_"),
+                    scope.knowledge_space_id,
+                    scope.project_id,
                     run_id,
                     str(item.get("unit_id", item.get("statement", "")))[:120],
-                    _json(item),
+                    str(item.get("statement", ""))[:4_000],
+                    str(item.get("disposition", "DROP")),
+                    _json(list(item.get("reason_codes", ()))),
                     stamp,
                 ),
             )
@@ -2565,10 +2590,6 @@ class ClaimStore:
                     "UPDATE review_queue SET status = 'resolved', resolved_at = ?, resolved_by = ? WHERE review_id = ?",
                     (stamp, actor_subject, review_id),
                 )
-                db.execute(
-                    "INSERT INTO stage_artifacts(run_id, stage, input_fingerprint, prompt_version, model_id, output_json, created_at) VALUES (?, 'review_action', ?, '', '', ?, ?)",
-                    (review["run_id"], review_id, _json(result), stamp),
-                )
                 db.commit()
             except Exception:
                 db.rollback()
@@ -2605,6 +2626,16 @@ class ClaimStore:
         if action == "confirm_identity":
             if not topic_id:
                 raise ClaimStoreError("confirm_identity needs the topic to attach.")
+            # The foreign key would refuse this too. Checking first turns a
+            # constraint violation into a message that names the missing topic.
+            known = db.execute(
+                "SELECT 1 FROM topics WHERE topic_id = ? AND knowledge_space_id = ?",
+                (topic_id, scope.knowledge_space_id),
+            ).fetchone()
+            if not known:
+                raise ClaimStoreError(
+                    f"Topic {topic_id} does not exist in knowledge space {scope.knowledge_space_id}."
+                )
             db.execute(
                 "INSERT OR IGNORE INTO topic_claims(knowledge_space_id, project_id, topic_id, claim_id, created_at) VALUES (?, ?, ?, ?, ?)",
                 (scope.knowledge_space_id, scope.project_id, topic_id, review["subject_id"], now_iso()),
@@ -2722,18 +2753,16 @@ class ClaimStore:
             return {**base, "retained": False}
 
         if action == "retain":
-            # Retention is its own axis. Writing it here is what keeps a later
-            # reader from reading "retained" as "verified" or "adopted".
-            db.execute(
-                "INSERT INTO stage_artifacts(run_id, stage, input_fingerprint, prompt_version, model_id, output_json, created_at) VALUES (?, 'review_retain', ?, '', '', ?, ?)",
-                (
-                    review["run_id"],
-                    review["review_id"],
-                    _json({"retained": True, "note": note, "actor_subject": actor_subject}),
-                    now_iso(),
-                ),
-            )
-            return {**base, "retained": True, "epistemic_status_changed": False}
+            # Retention is its own axis. The decision row records it, which is what
+            # keeps a later reader from reading "retained" as "verified" or
+            # "adopted". Nothing else is written, so retention changes no state.
+            return {
+                **base,
+                "retained": True,
+                "epistemic_status_changed": False,
+                "decision_state_changed": False,
+                "derivation_changed": False,
+            }
 
         raise ClaimStoreError(f"Unhandled review action: {action!r}.")
 
@@ -2873,6 +2902,14 @@ class ClaimStore:
         """
 
         with self._db() as db:
+            registered = db.execute(
+                "SELECT 1 FROM ingest_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if not registered:
+                raise ClaimStoreError(
+                    f"Run {run_id!r} is not registered, so a stage output cannot be cached against it. "
+                    "Call create_run first."
+                )
             row = db.execute(
                 """SELECT output_json, prompt_version, model_id FROM stage_artifacts
                    WHERE run_id = ? AND stage = ? AND input_fingerprint = ? AND prompt_version = ? AND model_id = ?""",
@@ -2926,6 +2963,30 @@ class ClaimStore:
                 db.rollback()
                 raise
         return {"seen": False, "artifact_id": artifact_id, "first_run_id": run_id}
+
+    def dispositions(self, scope: Scope, *, run_id: str = "") -> list[dict[str, Any]]:
+        """Every recorded disposition, with its reason codes, so a DROP is traceable."""
+
+        query = "SELECT * FROM dispositions WHERE project_id = ?"
+        parameters: list[Any] = [scope.project_id]
+        if run_id:
+            query += " AND run_id = ?"
+            parameters.append(run_id)
+        query += " ORDER BY created_at, disposition_id"
+        with self._db() as db:
+            rows = db.execute(query, tuple(parameters)).fetchall()
+        return [
+            {
+                "disposition_id": row["disposition_id"],
+                "run_id": row["run_id"],
+                "unit_id": row["unit_id"],
+                "statement": row["statement"],
+                "disposition": row["disposition"],
+                "reason_codes": json.loads(row["reason_codes_json"]),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
 
     def project_snapshot(self, scope: Scope) -> dict[str, Any]:
         version = self.current_version(scope.project_id)
