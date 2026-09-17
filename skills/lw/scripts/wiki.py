@@ -64,11 +64,25 @@ def now_iso() -> str:
 
 
 def find_root(value: str | None) -> Path:
+    """The project root for this invocation.
+
+    The upward walk stops at the home directory. Two reasons. `$HOME/.llm-wiki` is
+    this machine's config directory, which holds the key file, the project registry
+    and the local knowledge database, and it shares its name with the project
+    marker being searched for. And a command that writes files should not resolve
+    its way out of the tree you are working in. A project rooted exactly at the
+    home directory is still found, because the fallback below returns the working
+    directory when the walk finds nothing.
+    """
+
     if value:
         return Path(value).expanduser().resolve()
     current = Path.cwd().resolve()
+    home = Path.home().resolve()
     for marker in (WIKI_DIR, ".git"):
         for candidate in (current, *current.parents):
+            if candidate == home or candidate in home.parents:
+                break
             if (candidate / marker).exists():
                 return candidate
     return current

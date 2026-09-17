@@ -14,6 +14,10 @@ $EDITOR ~/.llm-wiki/env     # 填 LLM_WIKI_API_KEY
 
 Windows 上是 `%USERPROFILE%\.llm-wiki\env`。文件在仓库外面，所以不可能被 commit。
 
+`$LLM_WIKI_HOME` 是这台机器的配置目录，里面还有项目登记表、本地知识库和这个 key 文件。
+它和项目标记 `.llm-wiki` 同名，所以 `find_root` 的向上查找在 home 目录处停止：在 home 下
+任何没有标记的目录里运行 `/lw`，项目根就是当前目录，不会变成 home。
+
 确认它被读到了，这一步不会调用供应商、不产生费用：
 
 ```bash
