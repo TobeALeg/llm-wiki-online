@@ -20,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from acceptance import case  # noqa: E402
 
 from llm_wiki_mcp import projection, retrieval  # noqa: E402
-from llm_wiki_mcp.claim_store import ClaimStore  # noqa: E402
+from llm_wiki_mcp.claim_store import ClaimStore
+from llm_wiki_mcp.knowledge_service import KnowledgeService  # noqa: E402
 from llm_wiki_mcp.chunking import artifact_structure  # noqa: E402
 from llm_wiki_mcp.evidence import freeze_artifact, make_evidence, normalize_text  # noqa: E402
 from llm_wiki_mcp.knowledge_types import KnowledgeError, Scope, build_change_set  # noqa: E402
@@ -852,10 +853,27 @@ class RetrievalTests(KnowledgeCase):
             claims=[self.row(claim_id)],
             generated_at="2026-09-18T00:00:00Z",
         )
+        # A rebuild cannot write the manual sentence back into the page, because
+        # the claim set it renders from does not contain it.
         self.assertNotIn(added, rerendered["markdown"])
-        if detection["action"] == "none":
-            on_disk.write_text(rerendered["markdown"], encoding="utf-8")
-        kept = on_disk.read_text(encoding="utf-8")
+
+        # The production path is what must not overwrite the edit, so the page is
+        # stored as manual and the real rebuild is run against it.
+        service = KnowledgeService(self.store, knowledge_space_id=self.scope.knowledge_space_id)
+        self.store.upsert_projection(
+            scope=self.scope,
+            slug="cache",
+            title="缓存",
+            markdown=on_disk.read_text(encoding="utf-8"),
+            manifest=page["manifest"],
+            content_sha256=projection.page_content_sha256(on_disk.read_text(encoding="utf-8")),
+            manual_edit_hash=recorded,
+        )
+        outcome = service.rebuild_projections(project_id=self.scope.project_id, dirty_only=False)
+        self.assertEqual(outcome["skipped"], ["cache"], "a manual page is reported, not rewritten")
+        self.assertNotIn("cache", outcome["rebuilt"])
+        kept = self.store.projection("cache", self.scope)["markdown"]
+        self.assertEqual("manual", self.store.projection("cache", self.scope)["projection_status"])
         self.assertIn(added, kept)
         self.assertIn("缓存层使用 Redis。", kept)
 
@@ -958,12 +976,22 @@ class RetrievalTests(KnowledgeCase):
         self.assertEqual("数据库选型最终采用 PostgreSQL 17 作为主库。", served["statement"])
         self.assertNotEqual(stored["content_sha256"], served["content_sha256"])
 
+        # The served result does not expose its whole markdown, so the content is
+        # pinned in two steps: the served hash equals the fallback render's hash,
+        # and that render's text carries the current wording and not the
+        # superseded one. Together those say what was served, without asserting on
+        # a value the test computed from the same call the served path made.
         expected = projection.stale_projection_fallback(
             claims=[self.row(claim_id)], page_slug="database-choice", title="数据库选型"
         )
         self.assertEqual(expected["content_sha256"], served["content_sha256"])
         self.assertIn("PostgreSQL 17", expected["markdown"])
         self.assertNotIn("MySQL", expected["markdown"])
+        self.assertNotEqual(
+            projection.page_content_sha256(expected["markdown"]),
+            stored["content_sha256"],
+            "the served content must not be the stored stale page",
+        )
 
         self.assertNotIn(
             first_row["claim_version_id"],

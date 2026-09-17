@@ -125,6 +125,7 @@ class SkillDistributionTests(unittest.TestCase):
             "datetime",
             "hashlib",
             "json",
+            "os",
             "pathlib",
             "re",
             "sqlite3",

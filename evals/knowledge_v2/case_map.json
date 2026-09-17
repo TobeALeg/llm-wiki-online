@@ -17,6 +17,8 @@
       "test_evidence_addressing.RevisionHistoryTests.test_new_content_and_a_new_parser_never_shadow_an_old_citation"
     ],
     "E06": [
+      "test_evidence_addressing.ArtifactDigestTests.test_tampering_outside_the_cited_span_is_caught_by_the_artifact_digest",
+      "test_evidence_addressing.ArtifactDigestTests.test_verify_artifact_alone_refuses_an_edited_snapshot",
       "test_evidence_addressing.TamperedEvidenceTests.test_tampering_and_out_of_range_spans_refuse_to_return_text"
     ],
     "E07": [
@@ -182,7 +184,8 @@
       "test_modes_and_adapters.ModeParityTests.test_a_committed_claim_reaches_a_page_whose_manifest_names_it",
       "test_modes_and_adapters.ModeParityTests.test_a_controlled_extraction_produces_the_same_change_set_in_both_modes",
       "test_modes_and_adapters.ModeParityTests.test_a_second_identical_ingest_does_not_rewrite_the_page",
-      "test_modes_and_adapters.ModeParityTests.test_local_material_never_reaches_the_shared_database_or_a_module_cache"
+      "test_modes_and_adapters.ModeParityTests.test_local_material_never_reaches_the_shared_database_or_a_module_cache",
+      "test_modes_and_adapters.ModeParityTests.test_moving_a_page_changes_the_address_and_nothing_else"
     ],
     "X02": [
       "test_knowledge_adapters.KnowledgeAdapterTests.test_a_typed_result_keeps_every_field_and_is_labelled",

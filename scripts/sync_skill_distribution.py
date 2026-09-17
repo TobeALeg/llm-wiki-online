@@ -46,6 +46,7 @@ VENDORED_MODULES = (
     "retrieval.py",
     "migrate_v2.py",
     "wiki_prompts.py",
+    "model_roles.py",
 )
 """Core modules that must exist inside the skill package verbatim.
 

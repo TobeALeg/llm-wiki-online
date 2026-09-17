@@ -234,6 +234,16 @@ class GoldSetTests(unittest.TestCase):
         )
         self.units = metrics.load_gold(REPO_ROOT / "evals" / "knowledge_v2" / "gold.jsonl")
 
+    def test_no_gold_unit_is_marked_excluded(self):
+        self.assertEqual([], [unit["unit_id"] for unit in self.units if unit.get("excluded")])
+
+    def test_an_excluded_gold_unit_is_refused_rather_than_dropped_from_the_denominator(self):
+        polluted = [{**self.units[0], "excluded": True}]
+        with self.assertRaises(ValueError):
+            metrics.split_counts(polluted, self.manifest)
+        with self.assertRaises(ValueError):
+            metrics.evaluate(gold_units=polluted)
+
     def test_the_gold_file_carries_every_declared_field(self):
         for unit in self.units:
             with self.subTest(unit=unit["unit_id"]):

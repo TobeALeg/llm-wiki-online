@@ -2403,6 +2403,22 @@ class ClaimStore:
                 raise
         return {"old_slug": old_slug, "page_id": page_id, "reason": reason, "status": "redirected"}
 
+    def remove_projection(self, slug: str, scope: Scope) -> int:
+        """Retire one page. Its claims stay in the knowledge layer untouched."""
+
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = db.execute(
+                    "DELETE FROM page_projections WHERE project_id = ? AND slug = ?",
+                    (scope.project_id, slug),
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+        return cursor.rowcount
+
     def resolve_page_redirect(self, slug: str, scope: Scope) -> dict[str, Any] | None:
         with self._db() as db:
             row = db.execute(

@@ -176,9 +176,26 @@ def projection_renderer(
     existing = [row for row in (store.projection(item["slug"], scope) for item in store.projections(scope)) if row]
     existing_slugs = {row["slug"] for row in existing}
 
+    # A page's manifest says which claims belong on it, so those claims keep that
+    # address. Without this a page could only be rebuilt when its grouping happened
+    # to recompute to the same slug, which is false for any page that was renamed,
+    # merged or routed.
+    home_of_claim: dict[str, str] = {}
+    for row in existing:
+        for entry in (row["manifest"].get("entries") or ()):
+            claim_id = str(entry.get("claim_id") or "")
+            if claim_id:
+                home_of_claim.setdefault(claim_id, row["slug"])
+
     grouped: dict[str, dict[str, Any]] = {}
     for claim in claims:
-        for slug in claim_page_slugs(claim):
+        slugs = claim_page_slugs(claim)
+        home = home_of_claim.get(str(claim.get("claim_id") or ""))
+        if home and home not in slugs:
+            # The recorded home comes before the unrouted fallback, so a claim
+            # already on a page stays there.
+            slugs = [home, *(slug for slug in slugs if slug != "project-knowledge")]
+        for slug in slugs:
             title = scope.project_id if slug == "project-knowledge" else slug
             grouped.setdefault(slug, {"slug": slug, "title": title, "claims": []})["claims"].append(claim)
 
@@ -561,6 +578,74 @@ class KnowledgeService:
     # ------------------------------------------------------------------
     # Projection
     # ------------------------------------------------------------------
+
+    def move_page(
+        self,
+        *,
+        project_id: str,
+        old_slug: str,
+        new_slug: str,
+        reason: str = "rename",
+        merge: bool = False,
+    ) -> dict[str, Any]:
+        """Move a page's address, leaving the knowledge exactly where it was.
+
+        A page is an aggregation, so renaming, merging or reorganising one changes
+        which address a reader uses and nothing about the claims behind it. The old
+        address is left as a redirect, because an address that once worked must not
+        answer like a page that never existed.
+        """
+
+        scope = self.scope(project_id)
+        current = self.store.projection(old_slug, scope)
+        if current is None:
+            raise KnowledgeServiceError(
+                f"No page at {old_slug!r} in project {scope.project_id}.", code="PAGE_NOT_FOUND"
+            )
+        if old_slug == new_slug:
+            raise KnowledgeServiceError(
+                "A page cannot be moved onto its own address.", code="INVALID_MOVE"
+            )
+        target = self.store.projection(new_slug, scope)
+        if target is not None and not merge:
+            raise KnowledgeServiceError(
+                f"A page already exists at {new_slug!r}; pass merge to combine them.",
+                code="TARGET_EXISTS",
+            )
+
+        if target is not None:
+            destination = target
+        else:
+            destination = self.store.upsert_projection(
+                scope=scope,
+                slug=new_slug,
+                title=current["title"],
+                markdown=current["markdown"],
+                manifest=current["manifest"],
+                content_sha256=current["content_sha256"],
+                renderer_version=current["renderer_version"],
+                page_kind="topic",
+            )
+        self.store.record_page_move(
+            scope=scope,
+            old_slug=old_slug,
+            page_id=destination["page_id"],
+            reason=reason,
+        )
+        self.store.remove_projection(old_slug, scope)
+        if merge:
+            # The claims that used to render to the old address now belong to the
+            # destination page, so it is rebuilt from the union on the next pass.
+            self.store.mark_projection_dirty([new_slug], scope)
+        return {
+            "old_slug": old_slug,
+            "new_slug": new_slug,
+            "page_id": destination["page_id"],
+            "reason": reason,
+            "merged": merge,
+            "claims_moved": 0,
+            "claim_versions_changed": 0,
+        }
 
     def rebuild_projections(self, *, project_id: str, dirty_only: bool = True) -> dict[str, Any]:
         """Re-render affected pages, leaving a manual edit alone.

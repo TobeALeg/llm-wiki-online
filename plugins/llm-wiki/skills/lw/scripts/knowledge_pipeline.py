@@ -681,6 +681,17 @@ def candidate_payload(candidate: Any) -> dict[str, Any]:
     )
 
 
+def stage_provenance(notes: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The per-stage model provenance a cost report reads.
+
+    Each entry names the role, the model that answered, the variable that chose
+    it, the prompt version, the attempt count and the provider-reported tokens.
+    A provider that reports no usage yields `unknown` here, never an estimate.
+    """
+
+    return [dict(note[PROVENANCE_KEY]) for note in notes if PROVENANCE_KEY in note]
+
+
 def run_status(result: Mapping[str, Any]) -> str:
     """The one run state a result supports, and never `completed` with work outstanding.
 
@@ -1204,6 +1215,10 @@ def _history_for(
     return [dict(claim) for claim in history]
 
 
+PROVENANCE_KEY = "stage_provenance"
+"""The key a stage-provenance entry carries, so it is separable from a problem note."""
+
+
 def _ask_role(
     roles: ModelRoles,
     role: str,
@@ -1228,7 +1243,13 @@ def _ask_role(
             purpose=purpose,
             project_context=project_context,
         )
-        return _invoke(model, request, purpose, materials)
+        answer = _invoke(model, request, purpose, materials)
+        record = answer.get("_stage") if isinstance(answer, Mapping) else None
+        if isinstance(record, Mapping):
+            # Which model answered, under which prompt version, at what reported
+            # cost. The caller turns this into the run's cost record.
+            notes.append({PROVENANCE_KEY: dict(record)})
+        return answer
     except Exception as error:
         notes.append({
             "stage": role,

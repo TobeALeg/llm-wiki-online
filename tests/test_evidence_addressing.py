@@ -613,6 +613,60 @@ class RawAvailabilityTests(EvidenceFixture):
         self.assertTrue(self.recovered(raw_record).raw_available)
 
 
+class ArtifactDigestTests(EvidenceFixture):
+    """The artifact-level digest check, which the span hashes cannot cover.
+
+    Tampering inside a cited span is caught by comparing that span's own hash. The
+    digest over the whole artifact is what catches tampering outside every cited
+    span, so a test that only ever edits cited text leaves it unverified.
+    """
+
+    @case("E06")
+    def test_tampering_outside_the_cited_span_is_caught_by_the_artifact_digest(self):
+        text = "# Ops\n\nThe nightly build runs at 02:00 UTC and reports to #build.\n"
+        _, artifact, chunks = self.freeze(text, source_id="src-outside")
+        self.assertTrue(chunks)
+        # Cite only the first clause, so the rest of the artifact is outside the
+        # citation and no span hash covers it.
+        cited = (0, text.index("02:00"))
+        record = self.cite(artifact, (cited,))
+
+        uncited_offset = text.index("reports to")
+        self.assertGreater(uncited_offset, cited[1])
+        altered = text[:uncited_offset] + "is lost and does not reach" + text[uncited_offset + len("reports to"):]
+        self.assertEqual(altered[cited[0] : cited[1]], text[cited[0] : cited[1]])
+        self.sql(
+            "UPDATE parsed_artifacts SET normalized_text = ? WHERE artifact_id = ?",
+            (altered, artifact.artifact_id),
+        )
+
+        with self.assertRaises(evidence.EvidenceError) as raised:
+            self.recovered(record)
+        self.assertEqual(
+            raised.exception.code,
+            "HASH_MISMATCH",
+            "an edit outside the cited span must be refused by the artifact digest",
+        )
+        self.assertFalse(hasattr(raised.exception, "exact_text"))
+
+    @case("E06")
+    def test_verify_artifact_alone_refuses_an_edited_snapshot(self):
+        """Called directly, so the guard is proven even if a caller skips recover."""
+
+        text = "# Ops\n\nBody.\n"
+        _, artifact, _chunks = self.freeze(text, source_id="src-direct")
+        evidence.verify_artifact(artifact)
+
+        from dataclasses import replace as dataclass_replace
+
+        tampered = dataclass_replace(
+            artifact, normalized_text=artifact.normalized_text + " an added line"
+        )
+        with self.assertRaises(evidence.EvidenceError) as raised:
+            evidence.verify_artifact(tampered)
+        self.assertEqual(raised.exception.code, "HASH_MISMATCH")
+
+
 class OffsetUnitParityTests(unittest.TestCase):
     def test_the_chunker_and_the_evidence_module_agree_on_the_offset_unit(self):
         self.assertEqual(chunking.OFFSET_UNIT, "unicode_code_point")

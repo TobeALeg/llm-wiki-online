@@ -171,6 +171,42 @@ class ModeParityTests(unittest.TestCase):
         self.assertNotEqual(page["content_sha256"], "")
 
     @case("X01")
+    def test_moving_a_page_changes_the_address_and_nothing_else(self):
+        """A page is an aggregation, so a rename must not touch the knowledge."""
+
+        service, store = self._service(self.local_database, "parity-demo", "local")
+        self._ingest(service, "parity-demo", MATERIAL, "key-move", "run-move")
+        scope = Scope.of("local", "parity-demo")
+        claim = store.iter_claims(scope)[0]
+        before = store.get_claim(claim["claim_id"], scope)
+
+        moved = service.move_page(project_id="parity-demo", old_slug="project-knowledge", new_slug="storage-choice")
+        self.assertEqual(moved["old_slug"], "project-knowledge")
+        self.assertEqual(moved["new_slug"], "storage-choice")
+        self.assertEqual(moved["claims_moved"], 0, "a page move never moves a claim")
+        self.assertEqual(moved["claim_versions_changed"], 0)
+
+        # The address moved and the old one still resolves to where it went.
+        self.assertIsNone(store.projection("project-knowledge", scope))
+        self.assertEqual(store.projection("storage-choice", scope)["slug"], "storage-choice")
+        redirect = store.resolve_page_redirect("project-knowledge", scope)
+        self.assertEqual(redirect["current_slug"], "storage-choice")
+        self.assertEqual(redirect["status"], "redirected")
+
+        # The claim is byte-for-byte the same claim, with the same evidence.
+        after = store.get_claim(claim["claim_id"], scope)
+        self.assertEqual(before["selected_version"], after["selected_version"])
+        self.assertEqual(before["current_version_id"], after["current_version_id"])
+        self.assertEqual(before["origins"], after["origins"])
+        self.assertEqual(before["history"], after["history"])
+
+        # Merging onto an existing address needs to be asked for.
+        with self.assertRaises(knowledge_service_module.KnowledgeServiceError):
+            service.move_page(project_id="parity-demo", old_slug="storage-choice", new_slug="storage-choice")
+        with self.assertRaises(knowledge_service_module.KnowledgeServiceError):
+            service.move_page(project_id="parity-demo", old_slug="nope", new_slug="elsewhere")
+
+    @case("X01")
     def test_a_second_identical_ingest_does_not_rewrite_the_page(self):
         service, store = self._service(self.local_database, "parity-demo", "local")
         self._ingest(service, "parity-demo", MATERIAL, "key-1", "run-1")

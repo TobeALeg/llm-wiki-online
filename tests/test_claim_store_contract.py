@@ -1077,6 +1077,28 @@ class ClaimEvolutionTests(ClaimStoreTestCase):
             )
         self.assertEqual("INVALID_RELATION", error.exception.code)
 
+        # A Topic to Claim edge is the other half of the case. It is refused before
+        # a relation object exists at all, because both endpoints are typed claim
+        # versions, so a topic id cannot be spelled into one of those slots.
+        for endpoint in ("top_" + "2" * 32, "topic:harness", "claim-1"):
+            with self.subTest(endpoint=endpoint):
+                with self.assertRaises(KnowledgeError) as mixed:
+                    ClaimRelation(
+                        relation_id="rel_" + "3" * 32,
+                        relation_type="supports",
+                        from_claim_version_id=version_a,
+                        to_claim_version_id=endpoint,
+                    )
+                self.assertEqual("INVALID_ID", mixed.exception.code)
+        with self.assertRaises(ClaimStoreError):
+            self.commit(
+                "r08-topic-endpoint",
+                [],
+                base_version=version_now,
+                relations=[edge("supports", version_a, "top_" + "4" * 32)],
+            )
+        self.assertEqual([], self.store.relations_of_type("supports", self.alpha))
+
 
 class ReviewActionTests(ClaimStoreTestCase):
     @case("V01")

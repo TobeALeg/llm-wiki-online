@@ -194,6 +194,7 @@ def evaluate(
 ) -> EvaluationReport:
     """Turn one run's raw outcomes into the twelve release metrics."""
 
+    refuse_excluded_gold(gold_units)
     report = EvaluationReport()
 
     recovered, total_evidence = _count(published_evidence, "recovered")
@@ -267,9 +268,27 @@ def load_gold(path: str | Path) -> list[dict[str, Any]]:
     return units
 
 
+def refuse_excluded_gold(units: Sequence[Mapping[str, Any]]) -> None:
+    """A gold unit may not be excluded from the denominator.
+
+    `excluded` exists so an evaluation run can skip a row it genuinely cannot
+    score, and a run reports how many it skipped. Marking a row excluded in the
+    gold file itself would drop a failing sample out of the denominator, which is
+    the exact way the spec forbids raising a score.
+    """
+
+    offenders = [str(unit.get("unit_id")) for unit in units if unit.get("excluded")]
+    if offenders:
+        raise ValueError(
+            "These gold units are marked excluded, which removes them from every "
+            "denominator. Fix the sample or report it as a failure: " + ", ".join(offenders)
+        )
+
+
 def split_counts(units: Sequence[Mapping[str, Any]], manifest: Mapping[str, Any]) -> dict[str, Any]:
     """The coverage of the gold set against the sizes the spec asks for."""
 
+    refuse_excluded_gold(units)
     minimums = manifest["minimums"]
     by_split = {"dev": 0, "holdout": 0}
     for unit in units:

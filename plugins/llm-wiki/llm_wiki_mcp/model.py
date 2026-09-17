@@ -10,7 +10,8 @@ import urllib.request
 from typing import Any
 
 from .core import MAX_OUTPUT_CHARS, Model
-from .wiki_prompts import build_request
+from .model_roles import resolve_model, stage_record, usage_from_response
+from .wiki_prompts import PROMPT_VERSIONS, build_request
 
 
 class ModelError(RuntimeError):
@@ -26,7 +27,9 @@ def _call_model(payload: dict[str, Any], purpose: str, existing_pages: list[dict
     if not api_key:
         raise ModelError("No model provider key is configured.")
     base_url = os.environ.get("LLM_WIKI_BASE_URL", "https://api.deepseek.com").rstrip("/")
-    model = os.environ.get("LLM_WIKI_MODEL", "deepseek-flash")
+    role = str(payload.get("role") or "default")
+    resolved = resolve_model(role, os.environ)
+    model = resolved["model"]
     request_object = build_request(purpose, payload, existing_pages, phase=payload.get("phase"))
     body = json.dumps({
         "model": model,
@@ -56,6 +59,7 @@ def _call_model(payload: dict[str, Any], purpose: str, existing_pages: list[dict
         raise ModelError("Model provider request failed.") from exc
     if len(raw) > MAX_OUTPUT_CHARS:
         raise ModelError("Model provider response exceeded the output limit.")
+    result: Any = None
     try:
         result = json.loads(raw.decode("utf-8"))
         content = result["choices"][0]["message"]["content"].strip()
@@ -70,4 +74,14 @@ def _call_model(payload: dict[str, Any], purpose: str, existing_pages: list[dict
         "name": f"{base_url} ({model})",
         "retention": "unknown; verify the configured provider policy",
     }
+    # One retry is counted by the caller, which knows whether it re-asked. This
+    # records what this single call cost and which model answered it.
+    update["_stage"] = stage_record(
+        role=role,
+        resolved=resolved,
+        prompt_version=str(PROMPT_VERSIONS.get(role, "")),
+        attempts=1,
+        usage=usage_from_response(result),
+        base_url=base_url,
+    )
     return update
