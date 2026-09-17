@@ -193,6 +193,7 @@
       "test_knowledge_adapters.KnowledgeAdapterTests.test_the_browser_carries_an_evidence_error_code_rather_than_an_empty_quote",
       "test_knowledge_adapters.KnowledgeAdapterTests.test_the_browser_reports_claim_status_without_losing_an_axis",
       "test_knowledge_adapters.KnowledgeAdapterTests.test_the_mcp_surface_exposes_the_v2_tools_when_wired",
+      "test_modes_and_adapters.CleanSkillInstallTests.test_a_hand_edited_page_is_kept_and_marked_rather_than_overwritten",
       "test_modes_and_adapters.CleanSkillInstallTests.test_frozen_local_knowledge_is_readable_through_the_cli",
       "test_modes_and_adapters.CleanSkillInstallTests.test_the_vendored_core_loads_without_the_server_package"
     ],

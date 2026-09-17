@@ -1357,6 +1357,53 @@ def do_knowledge_status(root: Path, args: argparse.Namespace) -> None:
     print(json.dumps(status, ensure_ascii=False, indent=2))
 
 
+def export_projections(root: Path, service: Any, binding: dict[str, Any]) -> dict[str, Any]:
+    """Write each rendered page beside the project, leaving a hand edit alone.
+
+    The knowledge lives in the home database and the Markdown here is a projection
+    of it, so this direction is one-way: a page edited by hand is reported and
+    marked, never overwritten, and its added text has to come back in as material.
+    """
+
+    from projection import detect_manual_edit, page_content_sha256
+
+    pages_dir = wiki_path(root) / "pages"
+    pages_dir.mkdir(parents=True, exist_ok=True)
+    scope = service.scope(binding["project_id"])
+    written: list[str] = []
+    edited: list[str] = []
+    for item in service.store.projections(scope):
+        page = service.store.projection(item["slug"], scope)
+        if page is None:
+            continue
+        target = pages_dir / f"{item['slug']}.md"
+        on_disk = target.read_text(encoding="utf-8") if target.is_file() else None
+        detection = detect_manual_edit(recorded_sha256=page["content_sha256"], on_disk_text=on_disk)
+        if detection["edited"]:
+            service.store.mark_projection_manual(
+                scope=scope,
+                slug=item["slug"],
+                manual_edit_hash=page_content_sha256(on_disk or ""),
+            )
+            edited.append(str(target))
+            continue
+        target.write_text(page["markdown"], encoding="utf-8")
+        written.append(str(target))
+    return {"written": written, "edited": edited, "pages_dir": str(pages_dir)}
+
+
+def do_knowledge_export(root: Path, args: argparse.Namespace) -> None:
+    service, binding = knowledge_service_for(root)
+    outcome = export_projections(root, service, binding)
+    print(json.dumps(outcome, ensure_ascii=False, indent=2))
+    for path in outcome["edited"]:
+        print(
+            f"{path} was edited by hand and was left alone. Its added text has to come back in "
+            "as material: run knowledge-prepare, fill in the candidates, then knowledge-ingest.",
+            file=sys.stderr,
+        )
+
+
 def do_knowledge_search(root: Path, args: argparse.Namespace) -> None:
     service, binding = knowledge_service_for(root)
     result = service.search(binding["project_id"], args.query, limit=max(1, args.limit))
@@ -1462,6 +1509,8 @@ def parser() -> argparse.ArgumentParser:
     knowledge_prepare.add_argument("--from-tree", action="store_true", help="ingest every eligible project file")
     knowledge_prepare.add_argument("--purpose", default="Capture durable project knowledge.")
     command("knowledge-status", "show knowledge version, claim counts and open reviews")
+    knowledge_export = command("knowledge-export", "write rendered pages as Markdown beside the project")
+    knowledge_export.add_argument("--dry-run", action="store_true", help="report what would be written")
     knowledge_search = command("knowledge-search", "search pages and claims in this project")
     knowledge_search.add_argument("query")
     knowledge_search.add_argument("--limit", type=int, default=10)
@@ -1531,6 +1580,8 @@ def main(argv: list[str] | None = None) -> int:
             do_knowledge_ingest(root, args)
         elif args.command == "knowledge-status":
             do_knowledge_status(root, args)
+        elif args.command == "knowledge-export":
+            do_knowledge_export(root, args)
         elif args.command == "knowledge-search":
             do_knowledge_search(root, args)
         elif args.command == "knowledge-evidence":

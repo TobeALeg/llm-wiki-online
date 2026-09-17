@@ -25,6 +25,7 @@ PageProjection`。Page 由已提交的 claim 版本按固定模板渲染，manif
 | `knowledge-claim` | 一个 claim 的状态、来源归因、支持组、历史版本、关系 |
 | `knowledge-explain` | 为什么持有这个结论 |
 | `knowledge-reviews` / `knowledge-review` | 列出待审项 / 记录审核动作 |
+| `knowledge-export` | 把渲染好的页面写成 `.llm-wiki/pages/*.md`；手改过的页面不覆盖，标记为 manual 并提示把新增内容作为材料重新摄取 |
 
 已有的 `init`、`scan`、`ingest`、`update`、`status`、`lint`、`context` 行为不变。
 

@@ -1,0 +1,25 @@
+    def mark_projection_manual(self, *, scope: Scope, slug: str, manual_edit_hash: str) -> int:
+        """Record that the page on disk was edited by hand.
+
+        The stored markdown stays the last generated text on purpose. Serving
+        hand-written text as knowledge would put unverified wording in front of a
+        reader under the claim layer's authority, so the page is marked instead and
+        a rebuild leaves it alone until the addition goes back in as material.
+        """
+
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = db.execute(
+                    """UPDATE page_projections SET projection_status = 'manual', dirty = 0,
+                           manual_edit_hash = ?
+                       WHERE project_id = ? AND slug = ?""",
+                    (manual_edit_hash, scope.project_id, slug),
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+        return cursor.rowcount
+
+    def remove_projection(self, slug: str, scope: Scope) -> int:

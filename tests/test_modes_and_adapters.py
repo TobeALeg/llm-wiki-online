@@ -289,6 +289,76 @@ class CleanSkillInstallTests(unittest.TestCase):
         self.assertEqual(self._run("knowledge-init").returncode, 0)
 
     @case("X02")
+    def test_a_hand_edited_page_is_kept_and_marked_rather_than_overwritten(self):
+        """The whole local path: ingest, export, hand edit, export again."""
+
+        self._bootstrap()
+        prepared = self._run("knowledge-prepare", "--text", MATERIAL)
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        document = json.loads(prepared.stdout)
+        source_id = next(iter(document["batches"]))
+        chunk = document["batches"][source_id]["chunks"][0]
+        document["batches"][source_id]["claims"] = [
+            {
+                "statement": "仅在当前低数据量场景使用 SQLite，暂不引入 Postgres。",
+                "state": {
+                    "knowledge_kind": "constraint",
+                    "derivation": "explicit",
+                    "epistemic_status": "asserted",
+                },
+                "conditions": ["当前低数据量场景"],
+                "attribution": {
+                    "asserted_by": "alice",
+                    "asserted_at": None,
+                    "asserted_at_precision": "unknown",
+                },
+                "origins": [{"derivation": "explicit", "evidence_refs": [chunk["evidence_id"]]}],
+                "support": ["evidence"],
+                "topic_ids": [],
+            }
+        ]
+        candidates = self.root / "candidates.json"
+        candidates.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+        ingested = self._run(
+            "knowledge-ingest", "--text", MATERIAL, "--candidates", str(candidates), "--key", "export-1"
+        )
+        self.assertEqual(ingested.returncode, 0, ingested.stderr)
+
+        first = self._run("knowledge-export")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        outcome = json.loads(first.stdout)
+        self.assertEqual(len(outcome["written"]), 1)
+        page = Path(outcome["written"][0])
+        self.assertTrue(page.is_file())
+        self.assertIn("SQLite", page.read_text(encoding="utf-8"))
+        self.assertEqual(outcome["edited"], [])
+
+        added = "手写补充：下周评估托管方案。"
+        separator = chr(10)
+        page.write_text(
+            page.read_text(encoding="utf-8") + separator + added + separator, encoding="utf-8"
+        )
+
+        second = self._run("knowledge-export")
+        self.assertEqual(second.returncode, 0, second.stderr)
+        again = json.loads(second.stdout)
+        self.assertEqual(again["written"], [], "an edited page is not rewritten")
+        self.assertEqual(again["edited"], [str(page)])
+        self.assertIn(added, page.read_text(encoding="utf-8"), "the hand edit survives")
+        self.assertIn("knowledge-prepare", second.stderr, "the message says how to bring it back in")
+
+        # The knowledge layer knows the page is hand-edited, so queries can say so.
+        import sqlite3
+
+        database = self.home / "knowledge.sqlite3"
+        connection = sqlite3.connect(database)
+        connection.row_factory = sqlite3.Row
+        row = connection.execute("SELECT projection_status, manual_edit_hash FROM page_projections").fetchone()
+        connection.close()
+        self.assertEqual(row["projection_status"], "manual")
+        self.assertNotEqual(row["manual_edit_hash"], "")
+
+    @case("X02")
     def test_the_vendored_core_loads_without_the_server_package(self):
         script = (
             "import sys, pathlib;"

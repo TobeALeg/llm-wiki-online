@@ -152,9 +152,8 @@
   `label_status: constructed_unconfirmed`；真实材料组尚未建立，缺口由 `--check-gold` 打印。
 - K01–K11 与 X01 用受控 fake 与受控提取器验证语义，不衡量提取质量；只有未执行的 holdout 会。
 - 浏览器写权限边界未扩大：审核动作经 MCP/CLI，Web 只读。
-- 页面投影写进数据库（`page_projections.markdown`）。本地模式下把投影导出到
-  `.llm-wiki/pages/` 的 Markdown 文件没有接线：手改检测的接口与测试就绪，但没有把文件同步到
-  磁盘的调用点。
+- 本地模式的投影导出是显式命令（`knowledge-export`），不在摄取后自动执行。手改过的页面会被
+  标记为 manual 并在导出时跳过，`knowledge-status` 不区分 manual 与 stale。
 - `.scratch/knowledge-v2/` 里的补丁脚本是本次实施的工作产物。整文件提交加脚本拼接，意味着单次
   改动不能逐行回溯。
 
