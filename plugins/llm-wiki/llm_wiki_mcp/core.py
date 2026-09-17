@@ -128,6 +128,33 @@ def normalize_materials(materials: Iterable[Any]) -> list[dict[str, str]]:
     return normalized
 
 
+def _normalized_page(page: Any) -> dict[str, Any]:
+    """One page in the shape a model request carries, without any collection limit."""
+
+    if not isinstance(page, dict):
+        raise CoreError("Each existing page must be an object.")
+    slug = _clean_string(page.get("slug"), "page slug", max_chars=80)
+    if not SLUG_PATTERN.fullmatch(slug):
+        raise CoreError(f"Unsafe or invalid page slug: {slug!r}")
+    content = _clean_string(page.get("content", page.get("body", "")), "page content")
+    sources = page.get("sources", [])
+    if isinstance(sources, str):
+        sources = [sources]
+    if not isinstance(sources, list):
+        raise CoreError(f"Existing page {slug} sources must be a list.")
+    aliases = page.get("aliases", [])
+    if isinstance(aliases, str):
+        aliases = [aliases]
+    if not isinstance(aliases, list):
+        raise CoreError(f"Existing page {slug} aliases must be a list.")
+    return {
+        "slug": slug,
+        "content": content,
+        "sources": sorted({_source_id(source) for source in sources}),
+        "aliases": sorted({_clean_string(alias, "alias", max_chars=120) for alias in aliases if str(alias).strip()}),
+    }
+
+
 def normalize_existing_pages(pages: Iterable[Any]) -> list[dict[str, Any]]:
     if isinstance(pages, (str, bytes)) or not isinstance(pages, Iterable):
         raise CoreError("existing_pages must be a list.")
@@ -135,28 +162,7 @@ def normalize_existing_pages(pages: Iterable[Any]) -> list[dict[str, Any]]:
     for index, page in enumerate(pages):
         if index >= MAX_EXISTING_PAGES:
             raise CoreError(f"existing_pages exceeds the {MAX_EXISTING_PAGES} page limit.")
-        if not isinstance(page, dict):
-            raise CoreError("Each existing page must be an object.")
-        slug = _clean_string(page.get("slug"), "page slug", max_chars=80)
-        if not SLUG_PATTERN.fullmatch(slug):
-            raise CoreError(f"Unsafe or invalid page slug: {slug!r}")
-        content = _clean_string(page.get("content", page.get("body", "")), "page content")
-        sources = page.get("sources", [])
-        if isinstance(sources, str):
-            sources = [sources]
-        if not isinstance(sources, list):
-            raise CoreError(f"Existing page {slug} sources must be a list.")
-        aliases = page.get("aliases", [])
-        if isinstance(aliases, str):
-            aliases = [aliases]
-        if not isinstance(aliases, list):
-            raise CoreError(f"Existing page {slug} aliases must be a list.")
-        result.append({
-            "slug": slug,
-            "content": content,
-            "sources": sorted({_source_id(source) for source in sources}),
-            "aliases": sorted({_clean_string(alias, "alias", max_chars=120) for alias in aliases if str(alias).strip()}),
-        })
+        result.append(_normalized_page(page))
     if sum(len(page["content"]) for page in result) > MAX_EXISTING_CHARS:
         raise CoreError(f"existing_pages exceed the {MAX_EXISTING_CHARS} character limit.")
     return result
@@ -165,11 +171,14 @@ def normalize_existing_pages(pages: Iterable[Any]) -> list[dict[str, Any]]:
 def snapshot_chars(pages: Iterable[Any]) -> int:
     """The size a direct submit would spend carrying this snapshot.
 
-    Measured on the normalized pages, which is what the request actually contains, so the
-    size trigger compares a real cost against a real budget rather than page-body length.
+    Measured on the shape a request actually carries, so the size trigger compares a real
+    cost against a real budget. This is a measurement and not a gate: the collection limits
+    that `normalize_existing_pages` enforces are deliberately not applied, because a project
+    holding more pages than a direct submit could carry is exactly the case routing exists
+    to serve. Applying the cap here would raise before `submit_mode` could choose routing.
     """
 
-    return _json_size(normalize_existing_pages(pages))
+    return _json_size([_normalized_page(page) for page in pages])
 
 
 def plan_catalog_slices(

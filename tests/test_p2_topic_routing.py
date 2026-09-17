@@ -281,6 +281,39 @@ class CatalogBudgetTests(unittest.TestCase):
         self.assertEqual(sum(len(group) for group in plan_catalog_slices(entries)), 520)
 
 
+class OversizedProjectTests(unittest.TestCase):
+    """The capability trigger is the whole reason a project may hold over 500 pages."""
+
+    def snapshot(self, count):
+        return [{
+            "slug": f"page-{index:03d}",
+            "title": "T",
+            "type": "guide",
+            "status": "current",
+            "tags": [],
+            "summary": "S",
+            "body": "b",
+            "sources": [f"s-{index}"],
+        } for index in range(count)]
+
+    def test_measuring_a_snapshot_does_not_apply_the_collection_limit(self):
+        # Measuring has to survive a project too large for a direct submit. If measurement
+        # raised here, submit_mode would never be reached and routing would be unreachable.
+        pages = self.snapshot(core.MAX_EXISTING_PAGES + 1)
+        self.assertGreater(core.snapshot_chars(pages), 0)
+
+    def test_the_collection_limit_still_gates_a_direct_submit(self):
+        pages = self.snapshot(core.MAX_EXISTING_PAGES + 1)
+        with self.assertRaises(CoreError):
+            core.normalize_existing_pages(pages)
+
+    def test_a_project_past_the_page_limit_routes_instead_of_failing(self):
+        self.assertEqual(
+            core.submit_mode(len(self.snapshot(core.MAX_EXISTING_PAGES + 1)), 10),
+            core.ROUTED,
+        )
+
+
 class SelectionValidationTests(unittest.TestCase):
     def test_a_slug_outside_the_slice_is_rejected(self):
         def model(payload, purpose, pages):

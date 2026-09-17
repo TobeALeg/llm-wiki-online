@@ -167,6 +167,24 @@ class PageCatalogTests(unittest.TestCase):
         self.assertEqual(self.store.get_page("policy")["page"]["aliases"], [])
 
 
+    def test_a_restore_brings_the_aliases_back_with_the_body(self):
+        # aliases live on the version row, so restoring a version has to restore them too.
+        # Otherwise a page would come back under its old text with its newest names.
+        page = update(body="First")
+        page["pages"][0]["aliases"] = ["first-name"]
+        self.store.commit_update("member-a", 0, "v1", self.materials, page)
+        first_version_id = self.store.page_versions("policy")["versions"][0]["id"]
+        second = update(body="Second")
+        second["pages"][0]["aliases"] = ["second-name"]
+        self.store.commit_update("member-b", 1, "v2", self.materials, second)
+        self.assertEqual(self.store.get_page("policy")["page"]["aliases"], ["second-name"])
+
+        self.store.restore_page("member-c", "policy", first_version_id, 2, "restore-1")
+        restored = self.store.get_page("policy")["page"]
+        self.assertEqual(restored["body"], "First")
+        self.assertEqual(restored["aliases"], ["first-name"])
+
+
 class AliasesMigrationTests(unittest.TestCase):
     """A database created before aliases existed must gain the column, not fail to open."""
 
