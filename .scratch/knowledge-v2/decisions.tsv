@@ -37,3 +37,11 @@ ts	phase	decision	why	evidence	result
 2026-09-17T16:30:00Z	verify	冻结提交后连跑三次全量套件，用来判定复核提出的间歇失败	复核在编辑期间的多轮运行里看到 E06 与适配层用例间歇失败，需要判定是真 flake 还是编辑中间态	python -m unittest discover -s tests 连续三次	三次都是 323 通过 0 失败，判定为编辑中间态，非 flake
 2026-09-17T16:45:00Z	verify	接上本地投影导出，把文档里记着的那条局限去掉	复核指出投影只写数据库，.llm-wiki/pages 没有调用点；手改检测有接口没出口	skills/lw/scripts/wiki.py::export_projections	实测导出、手改、再导出后文件保留且标记 manual
 2026-09-17T17:00:00Z	verify	补上 §4.5 的重试上限与分开的计数器，并接到 run 状态机	规格要求分别计数且仍失败时显式停止；只有计数器不接状态机会是同一类「声称有其实没有」	knowledge_pipeline.AttemptBudget 与 run_status	预算耗尽时 run 为 failed，K11 断言随规格更新，批次带 error_code
+2026-09-17T17:20:00Z	realrun	配置凭据后先跑零容忍边界探针，而不是直接跑 holdout	holdout 需要人工确认的 gold，而边界检查不需要；先证明规格禁止的事情没有发生	evals/knowledge_v2/real_model_probe.py	首轮六个用例里三个整批失败、一个拒绝全部
+2026-09-17T17:25:00Z	realrun	把 key 从受版本控制的模板移到仓库外的 $LLM_WIKI_HOME/env	模板是 tracked 文件，一次 git add -A 就会把凭据写进历史；该 key 从未进入任何提交	docs/knowledge-v2/env.example 复原为空	加守卫测试：模板里的凭据变量必须为空、不得出现 key 形态
+2026-09-17T17:40:00Z	realrun	发现并修掉 v2 角色请求被 v1 页面契约改写	传输层把角色请求塞进 evidence 并要求返回 pages，模型在两套矛盾契约间摇摆，三个用例整批失败；所有假模型测试都绕过了传输层	model.py::is_role_request	输入 token 从约 1000 降到约 680，三个失败用例中的两个转绿
+2026-09-17T17:50:00Z	realrun	发现 adopted 永远无法通过校验	adopted 需要快照里有 adoption_record 而没有任何组件生产它，材料自己写着「决定…」也只能停在提议	knowledge_pipeline::ADOPTION_PATTERNS	材料原文带采用标记时材料本身即采用记录，提议仍是提议
+2026-09-17T18:00:00Z	realrun	发现 _covered 的词面大小写不一致使含产品名的陈述全被拒	词面提取时转小写，匹配却区分大小写；从材料逐字抄出的句子被判成五个词缺三个	knowledge_pipeline::_contains	该案例通过，五个用例转绿
+2026-09-17T18:10:00Z	realrun	发现否定检测把疑问句与「材料包含该句」都读成否认	会不会是 A-not-A 疑问形式，尚未签署否定的是签署而不是前一句陈述；词距分不开，包含关系可以	ANOT_A_RE 与 _denial 的包围检查	两个方向各三条用例全部正确
+2026-09-17T18:20:00Z	realrun	限定词检查保留材料级广度，放弃收窄到句子	尝试收窄后 K04 的负例会被发布成普适结论，而失败方向不可接受；同主题不同谓述无法用词面分开	tests/test_knowledge_extraction.py::QualifierTests	代价是同主题误报走 REVIEW 而非丢弃，已记录为未关闭项
+2026-09-17T18:30:00Z	realrun	真机探针最终结果：六组语料中五组零容忍边界全部成立	剩下的 qualifiers 全部进 REVIEW 没有发布，根因是规格 §4.3 要求的语义修复未实现	.scratch/knowledge-v2/real-probe-final.json	边界成立 5/6，未关闭项已写进发布报告 5.1 节

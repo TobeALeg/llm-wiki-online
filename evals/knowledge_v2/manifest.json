@@ -70,8 +70,9 @@
   "not_executed": [
     {
       "item": "真实模型的 holdout 全链路三次运行",
-      "reason": "需要配置 LLM_WIKI_API_KEY 与真实模型供应商；本次执行环境没有可用凭据。",
-      "how_to_run": "python evals/knowledge_v2/run_eval.py --split holdout --runs 3 --model <model>"
+      "reason": "凭据已配置，缺的是人工确认的 gold 集。gold 未达最低规模且未人工确认前 run_eval 拒绝出质量报告，这是设计如此。",
+      "how_to_run": "python evals/knowledge_v2/run_eval.py --split holdout --runs 3 --materials <dir>",
+      "partial_evidence": "evals/knowledge_v2/real_model_probe.py 已对真实供应商跑过六组语料的零容忍边界检查，见 reports/knowledge-v2/release-report.md 第 5.1 节"
     },
     {
       "item": "真实材料组的 gold 人工确认",
