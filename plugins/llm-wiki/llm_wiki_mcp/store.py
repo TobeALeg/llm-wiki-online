@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
-from .core import CoreError, normalize_materials, validate_update_package
+from .core import CoreError, MAX_EXISTING_PAGES, normalize_materials, validate_update_package
 
 
 DEFAULT_PROJECT_ID = "company"
@@ -133,6 +133,7 @@ class SharedWikiStore:
                     summary TEXT NOT NULL,
                     body TEXT NOT NULL,
                     source_ids_json TEXT NOT NULL,
+                    aliases_json TEXT NOT NULL DEFAULT '[]',
                     updated_at TEXT NOT NULL,
                     version INTEGER NOT NULL,
                     PRIMARY KEY (project_id, slug)
@@ -149,6 +150,7 @@ class SharedWikiStore:
                     summary TEXT NOT NULL,
                     body TEXT NOT NULL,
                     source_ids_json TEXT NOT NULL,
+                    aliases_json TEXT NOT NULL DEFAULT '[]',
                     actor_subject TEXT NOT NULL,
                     action TEXT NOT NULL,
                     created_at TEXT NOT NULL,
@@ -187,6 +189,23 @@ class SharedWikiStore:
                 "INSERT OR IGNORE INTO wiki_project_meta(project_id, current_version) VALUES (?, ?)",
                 (DEFAULT_PROJECT_ID, legacy_version),
             )
+            self._add_missing_columns(db)
+
+    @staticmethod
+    def _add_missing_columns(db: sqlite3.Connection) -> None:
+        """Add columns a database created by an earlier version does not have yet.
+
+        `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table, so a new column only
+        reaches an old database through an explicit ALTER. The default keeps existing rows
+        readable as pages without aliases.
+        """
+
+        wanted = {"wiki_pages": ("aliases_json",), "wiki_versions": ("aliases_json",)}
+        for table, columns in wanted.items():
+            existing = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+            for column in columns:
+                if column not in existing:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT '[]'")
 
     @staticmethod
     def _legacy_schema(db: sqlite3.Connection) -> bool:
@@ -302,6 +321,7 @@ class SharedWikiStore:
             "summary": row["summary"],
             "body": row["body"],
             "sources": json.loads(row["source_ids_json"]),
+            "aliases": json.loads(row["aliases_json"]),
             "updated_at": row["updated_at"],
             "version": row["version"],
         }
@@ -321,6 +341,78 @@ class SharedWikiStore:
                 db.rollback()
                 raise
         return {"version": version, "pages": [self._page(row) for row in rows]}
+
+    def list_page_catalog(self, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any]:
+        """Identity for every page, without any page body.
+
+        This is what the routing phase reads. Sending the whole snapshot to choose affected
+        pages costs the same as the snapshot itself, so the catalog exists to keep that
+        decision off the page text.
+        """
+
+        with self._db() as db:
+            db.execute("BEGIN")
+            try:
+                normalized = self._ensure_project(db, project_id)
+                version = int(db.execute("SELECT current_version FROM wiki_project_meta WHERE project_id = ?", (normalized,)).fetchone()["current_version"])
+                rows = db.execute(
+                    "SELECT slug, title, type, status, summary, aliases_json FROM wiki_pages WHERE project_id = ? ORDER BY lower(title), slug",
+                    (normalized,),
+                ).fetchall()
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+        return {
+            "version": version,
+            "entries": [{
+                "slug": row["slug"],
+                "title": row["title"],
+                "type": row["type"],
+                "status": row["status"],
+                "summary": row["summary"],
+                "aliases": json.loads(row["aliases_json"]),
+            } for row in rows],
+        }
+
+    def get_pages_by_slugs(self, slugs: Iterable[str], project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any]:
+        """Full pages for exactly the named slugs, preserving the caller's order.
+
+        Unknown slugs are reported rather than dropped, so a caller that routed to a page
+        which vanished cannot silently merge against a shorter set.
+        """
+
+        wanted: list[str] = []
+        for slug in slugs:
+            if not isinstance(slug, str) or not PAGE_SLUG.fullmatch(slug):
+                raise StoreError(f"Invalid page slug: {slug!r}")
+            if slug not in wanted:
+                wanted.append(slug)
+        if len(wanted) > MAX_EXISTING_PAGES:
+            raise StoreError(f"Too many page slugs requested; the limit is {MAX_EXISTING_PAGES}.")
+        with self._db() as db:
+            db.execute("BEGIN")
+            try:
+                normalized = self._ensure_project(db, project_id)
+                version = int(db.execute("SELECT current_version FROM wiki_project_meta WHERE project_id = ?", (normalized,)).fetchone()["current_version"])
+                found: dict[str, sqlite3.Row] = {}
+                for start in range(0, len(wanted), 400):
+                    window = wanted[start:start + 400]
+                    placeholders = ",".join("?" * len(window))
+                    rows = db.execute(
+                        f"SELECT * FROM wiki_pages WHERE project_id = ? AND slug IN ({placeholders})",
+                        (normalized, *window),
+                    ).fetchall()
+                    found.update({row["slug"]: row for row in rows})
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+        return {
+            "version": version,
+            "pages": [self._page(found[slug]) for slug in wanted if slug in found],
+            "missing": [slug for slug in wanted if slug not in found],
+        }
 
     def search_pages(self, query: str, limit: int = 20, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any]:
         query = str(query or "").strip().lower()
@@ -448,18 +540,18 @@ class SharedWikiStore:
                 old_version = int(old["version"]) if old else None
                 db.execute(
                     """
-                    INSERT INTO wiki_versions(project_id, version, slug, title, type, status, tags_json, summary, body, source_ids_json, actor_subject, action, created_at, previous_version)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO wiki_versions(project_id, version, slug, title, type, status, tags_json, summary, body, source_ids_json, aliases_json, actor_subject, action, created_at, previous_version)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (normalized_project_id, new_version, page["slug"], page["title"], page["type"], page["status"], _json(page["tags"]), page["summary"], page["body"], _json(page["sources"]), actor_subject, "update", created_at, old_version),
+                    (normalized_project_id, new_version, page["slug"], page["title"], page["type"], page["status"], _json(page["tags"]), page["summary"], page["body"], _json(page["sources"]), _json(page["aliases"]), actor_subject, "update", created_at, old_version),
                 )
                 db.execute(
                     """
-                    INSERT INTO wiki_pages(project_id, slug, title, type, status, tags_json, summary, body, source_ids_json, updated_at, version)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(project_id, slug) DO UPDATE SET title=excluded.title, type=excluded.type, status=excluded.status, tags_json=excluded.tags_json, summary=excluded.summary, body=excluded.body, source_ids_json=excluded.source_ids_json, updated_at=excluded.updated_at, version=excluded.version
+                    INSERT INTO wiki_pages(project_id, slug, title, type, status, tags_json, summary, body, source_ids_json, aliases_json, updated_at, version)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(project_id, slug) DO UPDATE SET title=excluded.title, type=excluded.type, status=excluded.status, tags_json=excluded.tags_json, summary=excluded.summary, body=excluded.body, source_ids_json=excluded.source_ids_json, aliases_json=excluded.aliases_json, updated_at=excluded.updated_at, version=excluded.version
                     """,
-                    (normalized_project_id, page["slug"], page["title"], page["type"], page["status"], _json(page["tags"]), page["summary"], page["body"], _json(page["sources"]), created_at, new_version),
+                    (normalized_project_id, page["slug"], page["title"], page["type"], page["status"], _json(page["tags"]), page["summary"], page["body"], _json(page["sources"]), _json(page["aliases"]), created_at, new_version),
                 )
                 changed.append(page["slug"])
             summary = str(normalized_update.get("note", "Wiki updated."))
@@ -537,12 +629,12 @@ class SharedWikiStore:
             new_version = current + 1
             created_at = _now_iso()
             db.execute(
-                "INSERT INTO wiki_versions(project_id, version, slug, title, type, status, tags_json, summary, body, source_ids_json, actor_subject, action, created_at, previous_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (normalized_project_id, new_version, slug, historical["title"], historical["type"], historical["status"], historical["tags_json"], historical["summary"], historical["body"], historical["source_ids_json"], actor_subject, "restore", created_at, current_page["version"] if current_page else None),
+                "INSERT INTO wiki_versions(project_id, version, slug, title, type, status, tags_json, summary, body, source_ids_json, aliases_json, actor_subject, action, created_at, previous_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (normalized_project_id, new_version, slug, historical["title"], historical["type"], historical["status"], historical["tags_json"], historical["summary"], historical["body"], historical["source_ids_json"], historical["aliases_json"], actor_subject, "restore", created_at, current_page["version"] if current_page else None),
             )
             db.execute(
-                "UPDATE wiki_pages SET title=?, type=?, status=?, tags_json=?, summary=?, body=?, source_ids_json=?, updated_at=?, version=? WHERE project_id=? AND slug=?",
-                (historical["title"], historical["type"], historical["status"], historical["tags_json"], historical["summary"], historical["body"], historical["source_ids_json"], created_at, new_version, normalized_project_id, slug),
+                "UPDATE wiki_pages SET title=?, type=?, status=?, tags_json=?, summary=?, body=?, source_ids_json=?, aliases_json=?, updated_at=?, version=? WHERE project_id=? AND slug=?",
+                (historical["title"], historical["type"], historical["status"], historical["tags_json"], historical["summary"], historical["body"], historical["source_ids_json"], historical["aliases_json"], created_at, new_version, normalized_project_id, slug),
             )
             summary = f"Restored page {slug} from version {version_id}."
             db.execute("INSERT INTO wiki_audits(project_id, version, action, actor_subject, summary, source_ids_json, before_version, after_version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (normalized_project_id, new_version, "restore", actor_subject, summary, historical["source_ids_json"], current, new_version, created_at))

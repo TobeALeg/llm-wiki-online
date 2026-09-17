@@ -4,6 +4,11 @@
 packaged MCP actually executes (see `llm_wiki_mcp.service.engine_path`). Both are edited
 by hand, so a fix applied to one and not the other silently ships a different engine.
 This walks both trees and fails on any difference.
+
+`chunking.py` ships a third time inside the server package, at
+`llm_wiki_mcp/chunking.py`, because the server has to import the same chunker the CLI
+runs rather than growing a second implementation. The two skill trees keep it beside
+`wiki.py` for its script-relative `import chunking`, so all three stay byte-identical.
 """
 
 import sys
@@ -16,6 +21,7 @@ sys.path.insert(0, str(REPO_ROOT / "plugins" / "llm-wiki"))
 
 SOURCE = REPO_ROOT / "skills" / "lw"
 DISTRIBUTED = REPO_ROOT / "plugins" / "llm-wiki" / "skills" / "lw"
+PACKAGED_CHUNKER = REPO_ROOT / "plugins" / "llm-wiki" / "llm_wiki_mcp" / "chunking.py"
 IGNORED = {"__pycache__"}
 
 
@@ -60,6 +66,25 @@ class SkillDistributionTests(unittest.TestCase):
             (DISTRIBUTED / "scripts" / "wiki.py").resolve(),
             "the MCP must execute the distributed copy of the engine",
         )
+
+    def test_the_packaged_chunker_matches_both_skill_copies(self):
+        packaged = PACKAGED_CHUNKER.read_bytes()
+        for tree in (SOURCE, DISTRIBUTED):
+            shipped = (tree / "scripts" / "chunking.py").read_bytes()
+            self.assertEqual(
+                packaged,
+                shipped,
+                f"llm_wiki_mcp/chunking.py differs from {tree}/scripts/chunking.py; "
+                "the server and the CLI must run one chunker, not two",
+            )
+
+    def test_the_server_can_import_the_chunker_as_a_module(self):
+        import llm_wiki_mcp.chunking as module
+
+        text = "# Title\n\nBody text.\n"
+        chunks = module.chunk_text(text)
+        self.assertTrue(chunks)
+        self.assertEqual([chunk.text for chunk in chunks], [text[chunk.start:chunk.end] for chunk in chunks])
 
 
 if __name__ == "__main__":

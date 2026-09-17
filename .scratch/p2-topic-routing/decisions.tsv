@@ -1,0 +1,29 @@
+ts	phase	decision	why	evidence	result
+2026-09-17T00:10:00Z	frame	范围限定为设计文档 §7 的主题路由加 aliases，即阶段 E；§8 冲突协议不做	§7.6 把「P2 自身新增」明确限定为目录、两阶段、aliases 三项，§11 又把冲突单独列为阶段 F；§8 会带来六个 operation 与两个新元数据字段，混入会让本次无法一次验完	docs/weknora-llm-wiki-integration.md:277-279, :392-393	范围已定，F 挂起
+2026-09-17T00:12:00Z	frame	「P0 对 P2 影响的那一部分」判定为共享分块器，而不是 parse_id 持久化	§7.6 逐字把 A/B 阶段的分块与打包列为 P2 条件依赖，并点名 import llm_wiki_mcp.chunking 失败；§10 禁止另造一套本地与在线的算法。parse_id 持久化绑阶段 D	docs/weknora-llm-wiki-integration.md:283, :370	已交付，服务端暂无消费者
+2026-09-17T00:14:00Z	frame	定义完成写成六条可证伪断言，全部跑在真实 SharedWikiService 加真实 SharedWikiStore 上	断言要能读成「模型实际看到了什么」，因此桩模型记录 payload 而不是只断言最终页面	fixture measured snapshot=69,769 pages=8	六条全绿
+2026-09-17T00:16:00Z	harness	动手前先跑既有测试，基线记 137 个全绿	后面每次检查都要读成旧值对新值	python3 -m unittest discover -s tests	137 通过 0 失败
+2026-09-17T00:20:00Z	design	分块器规范副本放 llm_wiki_mcp/chunking.py，两份技能树保留字节相同镜像，parity 测试扩到三处	wiki.py 靠脚本相对 import chunking 加载，所以两份技能树仍要保留副本；不能只留服务端一份	shasum 三份同值；回退任一份变红	三份 6c28177f 一致
+2026-09-17T00:30:00Z	design	提交模式立成具名纯函数 submit_mode(page_count, snapshot_chars)，而不是在 submit 里内联 if	原设计只在目录为空时跳过路由；用户要求通用规则。第二个触发条件一来，内联判断就会变成两个必须同步的布尔	principle-model-the-domain；tests/test_wiki_core.py:SubmitModeTests	唯一决策点已定
+2026-09-17T00:35:00Z	design	尺寸触发取 normalize_existing_pages 之后的 JSON 长度，而不是页面正文长度之和	阈值要跟直投请求真正花的字符数比，否则「超限」是拿另一个量在比	实测 20 页正文 60,000 字符时 JSON 为 61,331	单位已对齐
+2026-09-17T00:36:00Z	design	DIRECT_SUBMIT_MAX_CHARS = 40,000，锚在设计文档自己举的最小例子下方	文档用 20 页 46,891 演示目录把它降到 4,220，所以那个规模应走路由；20 页以内的小项目保持直投，正好覆盖用户说的「刚建项目组往里丢文件」	docs/weknora-llm-wiki-integration.md:265；本仓库最大 50 页设定预算内	已定，可一行改
+2026-09-17T00:37:00Z	design	否决用页数做成本触发器，页数只承担能力触发	实测正文 100 字符时目录是快照的 1.53 倍，即更贵；一条目录记录约 300 字符而正文无下限，短页多页会误触发	本目录 spec.md 的实测表第二张	已改，少一根旋钮
+2026-09-17T00:38:00Z	design	别名进目录身份、进页面版本、随回滚恢复	阶段 E 验收点名别名；回滚若不恢复别名，页面会带着最新名字回到旧正文	tests/test_shared_store.py:test_a_restore_brings_the_aliases_back_with_the_body	绿
+2026-09-17T00:39:00Z	design	把「未选中不可修改」做成提交前校验 validate_routed_pages，而不是靠不给正文隐式保证	§7.8 的开放问题解法要求全部页面出现在目录里，既然给了全部身份，就必须真正确保未选中的改不动；否则目录成了一个可被利用的写入口	设计文档 §7.8；变异 M1 去掉即红	绿
+2026-09-17T00:41:00Z	design	新增 wiki_prompts.py 管理两阶段 contract，model.py 按 payload 的 phase 分派	阶段问的是两个不同问题，contract 不同；放在传输层里会让 prompt 与它约束的 payload 分离	设计文档 §10	已交付
+2026-09-17T00:43:00Z	design	否决把 Model 拆成 RouteModel 与 MergeModel 两个注入点	形状更干净但每个调用方与全部现有测试桩都要注入两次，而两阶段本来就来自同一个 provider	principle-laziness-protocol	单注入点，按 phase 分派
+2026-09-17T00:45:00Z	design	目录分批而不截断：normalize_catalog 不设条目数或总量上限	设计文档 §7.4 要求超 500 页仍能完成候选检索；若在这里设上限就与分批自相矛盾	plan_catalog_slices 切片并取并集；520 页测试	绿
+2026-09-17T00:50:00Z	review	plan_catalog_slices 的 budget 从默认参数改为每次调用解析	默认参数在定义时绑定，patch MAX_CATALOG_CHARS 会静默失效，测试因此测的是另一件事	修复前该测试通不过；改为 None 再取模块常量	已修
+2026-09-17T00:52:00Z	review	路由 payload 的目录键从 catalog 统一为 page_catalog	pipeline 与 transport 用两个名字指同一个东西，是表示泄漏	修复前测试 KeyError page_catalog	已统一
+2026-09-17T00:55:00Z	review	漏选退回从「selected 为空则退回」改为「package 为 None 则退回」，并让 run_routed 在空选择时不再发起合并调用	原实现先拿空页面集合做一次合并，那次调用什么也决定不了，纯浪费；同时两个条件在语义上重复	变异 M2 去掉退回即 2 个错误	已简化
+2026-09-17T00:57:00Z	review	删掉空的目录特判，因为它在真实常量下不可达	空目录不会超过 40,000 字符阈值，所以「空目录时直投」与「低于阈值时直投」是同一结果；保留它就是一个无法被验证的分支	变异 M3 先为绿，改为让空目录发起路由后才变红	已删，测改为断言不发起路由
+2026-09-17T01:00:00Z	review	变异测试暴露自己两条测试因错误原因通过：漏选退回与非对象响应	先怀疑观测方法。一条在修复回退后仍绿的测试，等于没有测试	M2 首次为 OK；重写为只对整份快照响应后才变红	已修正
+2026-09-17T01:05:00Z	verify	自己动手对抗性复现 22 项，替代超时的子代理	子代理 600 秒超时无产出，验证不能因此跳过	/tmp/verify_p2.py	22 项全 PASS
+2026-09-17T01:06:00Z	verify	三种绕过尝试均被拒或无害：材料来源背书、大小写变体 slug、换新 slug 复制	withheld 页若能用提交材料背书来源，就只剩 routed 校验这一道；实测被拒	验证输出 C3 三行	两种被拒，一种合法新页
+2026-09-17T01:07:00Z	verify	确认 webapp / remote_mcp / remote_service 不读 aliases 也不受影响	新增字段只随 _page 只读流出；grep 三个消费者无命中	git grep	无回归
+2026-09-17T01:08:00Z	verify	本地 CLI 仍可运行，三份分块器字节一致，服务端可导入	grep 与 shasum 都不足以证明分发包正确，要实际执行	python3 skills/lw/scripts/wiki.py --help；import llm_wiki_mcp.chunking	均通过
+2026-09-17T01:10:00Z	verify	全量套件 172 通过；每个修复都做过变异验证	一个不可能失败的测试不是门禁	tests/ 全部	VERIFIED
+2026-09-17T01:20:00Z	verify	对抗性复现发现能力触发不可达：snapshot_chars 走 normalize_existing_pages，超过 500 页时先抛错	若测量与限制走同一条路径，submit_mode 永远收不到那个页数，第二个子句就是死代码；501 页实测 CoreError	修复前 501 页抛 CoreError；M7 回退会让 OversizedProjectTests 变红	已修，测量改用不设上限的 _normalized_page
+2026-09-17T01:22:00Z	verify	修复后重跑 22 项对抗性检查与 175 个测试	改一行也要重验	/tmp/verify_p2.py 全 PASS；tests/ 175 通过	VERIFIED
+2026-09-17T01:30:00Z	review	run_routed 的返回从四个键收敛为 package 或 None	service 只读 package，mode/selected/routing_note 三个键没有任何消费者，属推测性结构；principle-laziness-protocol 要求最小改动面	修复后 grep 无消费者；175 测试与 22 项对抗检查仍全绿	已简化
+2026-09-17T01:35:00Z	review	偏离自定计划：不实现 Python 侧候选召回评分函数，改为送完整目录（分批）由模型选	计划里写了「候选召回的评分函数」，但 D2 已定由模型从目录中选，且 §7.2 明确警告「不取前 N 页后当作全部」；客户端预过滤正是那条警告所指的失败模式	docs/weknora-llm-wiki-integration.md:261, :239；plan_catalog_slices 分批不丢弃	已按 D2 实现，计划此项作废

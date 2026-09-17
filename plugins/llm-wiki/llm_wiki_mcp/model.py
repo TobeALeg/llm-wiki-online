@@ -10,6 +10,7 @@ import urllib.request
 from typing import Any
 
 from .core import MAX_OUTPUT_CHARS, Model
+from .wiki_prompts import build_request
 
 
 class ModelError(RuntimeError):
@@ -26,24 +27,7 @@ def _call_model(payload: dict[str, Any], purpose: str, existing_pages: list[dict
         raise ModelError("No model provider key is configured.")
     base_url = os.environ.get("LLM_WIKI_BASE_URL", "https://api.deepseek.com").rstrip("/")
     model = os.environ.get("LLM_WIKI_MODEL", "deepseek-flash")
-    request_object = {
-        "wiki_purpose": purpose,
-        "evidence": payload,
-        "existing_pages": existing_pages,
-        "output_contract": {
-            "pages": [{
-                "slug": "lowercase-hyphenated-slug",
-                "title": "string",
-                "type": "concept|decision|guide|reference|person|client|process|system",
-                "status": "current|draft|superseded|archived",
-                "tags": ["string"],
-                "summary": "string",
-                "body": "Markdown",
-                "sources": ["exact submitted source_id"],
-            }],
-            "note": "short update summary",
-        },
-    }
+    request_object = build_request(purpose, payload, existing_pages, phase=payload.get("phase"))
     body = json.dumps({
         "model": model,
         "messages": [
