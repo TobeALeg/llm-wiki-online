@@ -1,0 +1,186 @@
+"""Two grounding heuristics that read a question as an assertion, and a scope too widely.
+
+The denial detector reads a bare 不 near a term as negating it. In an A-not-A
+question form (会不会, 能不能, 是不是, 有没有) that 不 or 没 turns a statement into a
+question rather than negating anything, so material that asks whether two things
+conflict was read as material that denies a conflict. A citation into that material
+was then refused as contradicted, which loses knowledge the project did state, in a
+direction that looks like a strict gate.
+
+The qualifier check had the opposite shape: it required every candidate to repeat
+every qualifier anywhere in its chunk, so a 除非 belonging to a sentence about
+Postgres was demanded of a sentence about something else.
+
+Both were found by running the extraction against a real provider. Every controlled
+fake returned wording that happened to avoid them.
+"""
+
+import sys
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).parents[1]
+sys.path.insert(0, str(REPO_ROOT / "plugins" / "llm-wiki"))
+
+from llm_wiki_mcp import knowledge_pipeline as pipeline  # noqa: E402
+from llm_wiki_mcp.knowledge_types import ClaimCandidate, ClaimState  # noqa: E402
+
+
+def candidate(statement, conditions=(), kind="constraint"):
+    return ClaimCandidate(
+        statement=statement,
+        state=ClaimState(
+            knowledge_kind=kind, derivation="explicit", epistemic_status="asserted"
+        ),
+        conditions=tuple(conditions),
+    )
+
+
+class QuestionFormTests(unittest.TestCase):
+    def test_an_a_not_a_question_is_not_a_negation(self):
+        for text in (
+            "这个缓存会不会打架？",
+            "缓存是不是要换？",
+            "缓存有没有上限？",
+            "这个方案能不能落地？",
+        ):
+            with self.subTest(text=text):
+                self.assertFalse(
+                    pipeline._negation_near(text, "缓存"),
+                    "a question form must not read as a negation",
+                )
+
+    def test_a_real_negation_of_the_same_verb_still_counts(self):
+        for text in ("缓存不会打架。", "缓存不再使用。", "缓存层不使用 Redis。"):
+            with self.subTest(text=text):
+                self.assertTrue(pipeline._negation_near(text, "缓存"))
+
+    def test_the_a_not_a_form_does_not_hide_a_negation_elsewhere_in_the_sentence(self):
+        # The question form is neutralised, the trailing 不 is not.
+        self.assertTrue(pipeline._negation_near("缓存能不能用还不确定。", "缓存"))
+
+    def test_a_negation_before_the_term_still_counts(self):
+        self.assertTrue(pipeline._negation_near("文档里没有记录这个原因。", "原因"))
+
+    def test_the_exact_sentence_from_the_real_run_is_no_longer_a_denial(self):
+        """The sentence a real model's citation was refused against."""
+
+        material = "工程师问了一句这个缓存怎么失效，以及和现有镜像层缓存会不会打架。"
+        self.assertFalse(pipeline._negation_near(material, "缓存"))
+
+    def test_the_pattern_is_named_and_matches_both_neutral_syllables(self):
+        self.assertTrue(hasattr(pipeline, "ANOT_A_RE"))
+        self.assertIsNotNone(pipeline.ANOT_A_RE.search("会不会"))
+        self.assertIsNotNone(pipeline.ANOT_A_RE.search("有没有"))
+        self.assertIsNone(pipeline.ANOT_A_RE.search("不会"))
+
+
+class QualifierScopeTests(unittest.TestCase):
+    """The qualifier rule is deliberately material-wide.
+
+    Narrowing it to the qualifier's own sentence was tried and rejected. A statement
+    can rewrite its subject closely enough that no term-level rule separates it from
+    an unrelated qualifier a paragraph away, and the direction that fails publishes a
+    scoped statement as a universal one. So the rule stays broad, and the cost is a
+    false positive on a statement that shares a subject with a qualified sentence
+    elsewhere, paid in REVIEW rather than by publishing or discarding.
+    """
+
+    MATERIAL = (
+        "新平台迁移仅限当前项目，暂不迁移生产环境的写入路径。"
+        + chr(10)
+        + "该方案可能是长期方向，除非引入双写机制。"
+    )
+
+    def test_a_statement_that_drops_the_qualifiers_reports_every_one(self):
+        self.assertEqual(
+            ["仅限当前项目", "暂不", "可能", "除非"],
+            pipeline._missing_qualifiers(
+                candidate("新平台迁移适用于所有生产环境"), self.MATERIAL
+            ),
+        )
+
+    def test_a_statement_that_carries_them_reports_nothing(self):
+        self.assertEqual(
+            [],
+            pipeline._missing_qualifiers(
+                candidate(
+                    "新平台迁移仅限当前项目，暂不迁移生产环境的写入路径",
+                    (
+                        "仅限当前项目",
+                        "暂不迁移生产环境的写入路径",
+                        "可能是长期方向",
+                        "除非引入双写机制",
+                    ),
+                ),
+                self.MATERIAL,
+            ),
+        )
+
+    def test_a_statement_carrying_only_some_qualifiers_reports_the_rest(self):
+        """The rule is material-wide, so carrying one does not excuse the others."""
+
+        self.assertEqual(
+            ["仅限当前项目", "可能", "除非"],
+            pipeline._missing_qualifiers(
+                candidate("暂不迁移生产环境的写入路径"), self.MATERIAL
+            ),
+        )
+
+
+class AttributeKindTests(unittest.TestCase):
+    """A stray attributes key is a formatting slip, not a false statement.
+
+    Observed on a real run: a faithful question was rejected outright because the
+    model attached a steps payload to it. Nothing reads that key for an
+    open_question, so dropping it keeps the statement and loses nothing.
+    """
+
+    def _build(self, kind, attributes):
+        return pipeline._build_candidate(
+            {
+                "statement": "这个缓存会不会打架？",
+                "knowledge_kind": kind,
+                "derivation": "explicit",
+                "epistemic_status": "asserted",
+                "attributes": attributes,
+            },
+            batch_id="batch-001",
+        )
+
+    def test_a_payload_the_kind_does_not_define_is_dropped(self):
+        built = self._build("open_question", {"steps": [{"action": "x"}]})
+        self.assertEqual({}, dict(built.attributes))
+        self.assertEqual("open_question", built.state.knowledge_kind)
+
+    def test_a_payload_the_kind_does_not_define_is_reported(self):
+        _kept, dropped = pipeline._declared_attributes(
+            {"knowledge_kind": "open_question", "attributes": {"steps": [{"action": "x"}]}}
+        )
+        self.assertEqual(["steps"], dropped)
+
+    def test_a_payload_the_kind_does_define_is_kept(self):
+        built = self._build("process", {"steps": [{"action": "x"}]})
+        self.assertEqual(["steps"], sorted(dict(built.attributes)))
+
+    def test_an_extra_key_inside_a_defined_payload_is_dropped(self):
+        kept, dropped = pipeline._declared_attributes(
+            {"knowledge_kind": "process", "attributes": {"steps": [], "invented": 1}}
+        )
+        self.assertEqual(["steps"], sorted(kept))
+        self.assertEqual(["invented"], dropped)
+
+    def test_the_defined_kinds_match_the_contract(self):
+        from llm_wiki_mcp.knowledge_types import KNOWLEDGE_KINDS
+
+        self.assertEqual(("process", "decision", "architecture"), pipeline.ATTRIBUTE_KINDS)
+        self.assertTrue(set(pipeline.ATTRIBUTE_KINDS) <= set(KNOWLEDGE_KINDS))
+
+    def test_an_empty_payload_stays_empty(self):
+        kept, dropped = pipeline._declared_attributes({"knowledge_kind": "process", "attributes": {}})
+        self.assertEqual({}, kept)
+        self.assertEqual([], dropped)
+
+
+if __name__ == "__main__":
+    unittest.main()

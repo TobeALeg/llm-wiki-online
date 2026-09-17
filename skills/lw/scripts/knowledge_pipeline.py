@@ -971,7 +971,11 @@ def validate_changes(
         if found:
             ordered = _ordered(found)
             codes = {code for code, _detail in ordered}
-            if codes == {RejectionCode.MISSING_QUALIFIER} and texts:
+            # A dropped qualifier usually also breaks the wording check, because
+            # restoring the qualifier is what makes the statement match the material.
+            # Requiring the qualifier to be the only problem would send the real cases
+            # back to being discarded, which is the outcome this branch exists to stop.
+            if RejectionCode.MISSING_QUALIFIER in codes and texts:
                 # The extraction is faithful but its scope is wrong: the material
                 # qualifies the statement and the candidate does not carry it.
                 # Publishing it unconditionally would be wrong, and discarding it
@@ -2093,6 +2097,43 @@ def _normalise_candidate(raw: Any, *, batch_id: str) -> tuple[ClaimCandidate | N
     return candidate, ignored, ""
 
 
+ATTRIBUTE_KINDS = ("process", "decision", "architecture")
+"""Knowledge kinds the contract defines an attributes payload for.
+
+A model that attaches the payload of a different kind, or an invented one, has
+made a formatting slip rather than a false statement. Refusing the whole candidate
+for it discards a faithful statement over a key nothing reads, so the extra keys are
+dropped here and reported the way every other ignored field is.
+"""
+
+
+def _declared_attributes(raw: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """The attributes this candidate may carry, and the keys that were dropped."""
+
+    payload = raw.get("attributes")
+    if not isinstance(payload, Mapping) or not payload:
+        return {}, []
+    kind = ""
+    state = raw.get("state")
+    if isinstance(state, Mapping):
+        kind = str(state.get("knowledge_kind") or "")
+    if not kind:
+        kind = str(raw.get("knowledge_kind") or "")
+    allowed = ATTRIBUTE_KEYS.get(kind, ())
+    if not allowed:
+        return {}, sorted(str(key) for key in payload)
+    kept = {str(key): value for key, value in payload.items() if str(key) in allowed}
+    dropped = sorted(str(key) for key in payload if str(key) not in allowed)
+    return kept, dropped
+
+
+ATTRIBUTE_KEYS: dict[str, tuple[str, ...]] = {
+    "process": ("steps",),
+    "decision": ("adopted_by",),
+    "architecture": ("components",),
+}
+
+
 def _build_candidate(raw: Mapping[str, Any], *, batch_id: str) -> ClaimCandidate:
     state = raw.get("state")
     if isinstance(state, Mapping):
@@ -2118,7 +2159,7 @@ def _build_candidate(raw: Mapping[str, Any], *, batch_id: str) -> ClaimCandidate
         ),
         inference_note=str(raw.get("inference_note") or ""),
         assumptions=tuple(str(item) for item in raw.get("assumptions") or ()),
-        attributes=dict(raw.get("attributes") or {}),
+        attributes=_declared_attributes(raw)[0],
         disposition=str(raw.get("disposition") or "").upper(),
         reason_codes=tuple(str(item) for item in raw.get("reason_codes") or ()),
         batch_id=str(raw.get("batch_id") or batch_id),
@@ -2403,17 +2444,41 @@ def _key_terms(text: str) -> list[str]:
     return terms
 
 
+def _contains(haystack: str, term: str) -> bool:
+    """Case-insensitive membership, because terms are lowercased at extraction.
+
+    A product name keeps its capitals in the material and loses them in the term
+    list, so a case-sensitive test reports every statement naming one as
+    unsupported. That is how a sentence copied verbatim out of the material came
+    to be refused three of its five terms short.
+    """
+
+    return term in haystack or term.lower() in haystack.lower()
+
+
 def _covered(wording: str, material: str, *, minimum: float) -> bool:
     terms = _key_terms(wording)
     if not terms:
         return True
     if not material.strip():
         return False
-    found = sum(1 for term in terms if term in material)
+    lowered = material.lower()
+    found = sum(1 for term in terms if term in material or term in lowered)
     return found / len(terms) >= minimum
 
 
 def _missing_qualifiers(candidate: ClaimCandidate, material: str) -> list[str]:
+    """The material's qualifiers that this statement needs and does not carry.
+
+    The scope is the whole material on purpose. Narrowing it to the sentence the
+    qualifier sits in was tried and rejected: a statement can rewrite its own
+    subject closely enough that no term-level rule separates it from an unrelated
+    qualifier a paragraph away, and the direction that fails is the one that
+    publishes a scoped statement as a universal one. The cost is a false positive
+    on a statement that shares a subject with a qualified sentence elsewhere, and
+    that cost is paid in REVIEW rather than by publishing or discarding.
+    """
+
     wording = "\n".join([candidate.statement, *candidate.conditions])
     return [
         token
@@ -2455,7 +2520,7 @@ def _denial(candidate: ClaimCandidate, material: str) -> str:
         if _negation_near(candidate.statement, term):
             continue
         for sentence in re.split(r"(?<=[.!?。！？\n])\s*", material):
-            if term not in sentence:
+            if not _contains(sentence, term):
                 continue
             if _negation_near(sentence, term):
                 return sentence.strip()

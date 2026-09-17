@@ -332,9 +332,16 @@ class QualifierTests(unittest.TestCase):
         ]))
 
         outcome = validate(prepared, result["candidates"])
-        self.assertEqual([item["code"] for item in outcome["rejected"]], ["missing_qualifier"])
-        self.assertIn("仅限当前项目", outcome["rejected"][0]["detail"])
+        # The claim is not published, and the reason names the qualifiers it dropped.
+        # It lands in REVIEW rather than in the rejected list, because discarding a
+        # constraint the project stated loses knowledge while a person can decide
+        # whether to restore the qualifier or publish the current wording.
         self.assertEqual(claims_of(outcome), [])
+        self.assertEqual([], [item["code"] for item in outcome["rejected"]])
+        self.assertEqual(1, len(outcome["reviews"]))
+        review = outcome["reviews"][0]
+        self.assertEqual(review["trigger_code"], "missing_qualifier")
+        self.assertIn("仅限当前项目", review["question"])
 
 
 class SynthesisPremiseTests(unittest.TestCase):
