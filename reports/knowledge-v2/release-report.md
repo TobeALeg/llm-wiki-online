@@ -129,13 +129,13 @@
 | §5.1 `store.py` | 委托 v2 提交与读取 | `store.py` 与基线逐字节相同，委托由 `knowledge_service.py` 与 `shared_service.py` 承担 | 同上；两套写入语义共用一个 v1 模块会互相渗透 |
 | §5.1 `wiki_pipeline.py` | 增加 v2 prepare/extract/validate | v2 编排在 `knowledge_pipeline.py` | `wiki_pipeline.py` 的 `run_routed` 是 v1 页面合并，规格明确要求不要改它 |
 | §5.2 `schema_migrations` | 迁移版本、基线、校验和、恢复清单 | `claim_store.py` 写入 `schema_migrations` 版本 2 与 schema 校验和；`migrate_v2.py` 的进度记在 `migration_runs` | v2 建表是同一次 `initialize()`，没有编号迁移步骤；旧库补列走 `_add_missing_columns`，未编号 |
+| §4.5 重试计数 | 传输重试与语义修复分别计数，自动修复上限每阶段一次 | `knowledge_pipeline.AttemptBudget` 两个计数器各自上限 1；批次首败重试一次，再失败即停；预算耗尽时 `run_status` 返回 `failed` 而不是 `extracting`；批次记录带稳定的 `error_code` | 传输重试是请求没到达，语义修复是答不符合契约后的重问，只有后者会把漏掉变成看起来合理的错答，所以分开计 |
 | §8.4 REVIEW 比例与成本 | 每材料组 token、重试与费用统计 | `metrics.review_burden` 提供比例、每材料组待审与合组卡片数；成本按阶段记录在 `_stage`，没有汇总报告 | 成本需要真实模型运行才有数，未执行前汇总只会是空表 |
 
 ### 6.2 未实现的规格条款
 
 | 规格位置 | 要求 | 状态 |
 |---|---|---|
-| §4.5 | 自动修复上限每阶段一次；传输重试与语义修复分别计数 | 未实现。批次失败会记入 `run_items` 并把 run 停在非 completed，但没有重试计数，也没有每阶段修复上限 |
 | §8.3 | v1/v2 同口径覆盖率与复用率提升 10 个百分点 | 未实现，需要真实模型跑 v1 与 v2 |
 | §8.4 | 每保留 Claim 的 token、重试与费用 | 阶段级已记录（模型、prompt 版本、重试次数、上报 token 或 unknown），未按 Claim 汇总 |
 

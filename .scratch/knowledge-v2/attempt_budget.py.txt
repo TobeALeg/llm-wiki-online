@@ -1,0 +1,38 @@
+RETRY_LIMITS = {"transport_retries": 1, "semantic_repairs": 1}
+"""One automatic repair per stage, and transport retries counted separately.
+
+The spec keeps the two apart because they are different events. A transport retry
+is a request that never arrived and costs nothing but a repeat. A semantic repair
+is a second model call asking for a better answer after the first one did not
+satisfy the contract, and those are the calls that can quietly multiply cost and
+turn a miss into a plausible-looking wrong answer. A third category, giving up, is
+not a retry at all: it stops the batch and leaves the run unfinished.
+"""
+
+
+class AttemptBudget:
+    """Counts what a stage actually spent, so a report can say which kind it was."""
+
+    def __init__(self, limits: Mapping[str, int] | None = None):
+        self.limits = dict(limits or RETRY_LIMITS)
+        self.spent = {name: 0 for name in self.limits}
+
+    def take(self, kind: str) -> bool:
+        """Ask for one more attempt of this kind. False means the budget is gone."""
+
+        if kind not in self.limits:
+            raise ValueError(f"Unknown attempt kind: {kind!r}")
+        if self.spent[kind] >= self.limits[kind]:
+            return False
+        self.spent[kind] += 1
+        return True
+
+    def exhausted(self) -> list[str]:
+        return [name for name in self.limits if self.spent[name] >= self.limits[name]]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "spent": dict(self.spent),
+            "limits": dict(self.limits),
+            "exhausted": self.exhausted(),
+        }

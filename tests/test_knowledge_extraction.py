@@ -852,7 +852,12 @@ class UnfinishedBatchTests(unittest.TestCase):
             failing,
         )
         self.assertNotEqual(pipeline.run_status(result), "completed")
-        self.assertEqual(pipeline.run_status(result), "extracting")
+        # The batch was retried once and failed again, so the retry budget is spent
+        # and the run stops explicitly rather than reporting progress it cannot make.
+        self.assertEqual(result["attempts"]["transport_retries"], 1)
+        self.assertEqual(result["attempts"]["exhausted"], ["transport_retries"])
+        self.assertEqual(pipeline.run_status(result), "failed")
+        # A result claiming completion with an unfinished batch is still not complete.
         self.assertEqual(
             pipeline.run_status({"unfinished": failing, "status": "completed", "batches": batches}),
             "extracting",

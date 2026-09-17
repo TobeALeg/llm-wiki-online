@@ -36,3 +36,4 @@ ts	phase	decision	why	evidence	result
 2026-09-17T16:25:00Z	verify	流水时间戳是事后补的，不是当时写的，在此说明	写入脚本给每一行盖了同一个时间戳，随后追加的行时间也与提交时刻不符；流水的时间轴不可信	write_trail.py 的 stamp 常量	如实标注：时间戳仅供排序，真实顺序见提交历史
 2026-09-17T16:30:00Z	verify	冻结提交后连跑三次全量套件，用来判定复核提出的间歇失败	复核在编辑期间的多轮运行里看到 E06 与适配层用例间歇失败，需要判定是真 flake 还是编辑中间态	python -m unittest discover -s tests 连续三次	三次都是 323 通过 0 失败，判定为编辑中间态，非 flake
 2026-09-17T16:45:00Z	verify	接上本地投影导出，把文档里记着的那条局限去掉	复核指出投影只写数据库，.llm-wiki/pages 没有调用点；手改检测有接口没出口	skills/lw/scripts/wiki.py::export_projections	实测导出、手改、再导出后文件保留且标记 manual
+2026-09-17T17:00:00Z	verify	补上 §4.5 的重试上限与分开的计数器，并接到 run 状态机	规格要求分别计数且仍失败时显式停止；只有计数器不接状态机会是同一类「声称有其实没有」	knowledge_pipeline.AttemptBudget 与 run_status	预算耗尽时 run 为 failed，K11 断言随规格更新，批次带 error_code

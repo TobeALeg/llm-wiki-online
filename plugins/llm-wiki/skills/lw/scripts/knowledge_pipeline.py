@@ -90,6 +90,46 @@ ARTIFACT_FIELDS = (
 )
 
 
+RETRY_LIMITS = {"transport_retries": 1, "semantic_repairs": 1}
+"""One automatic repair per stage, and transport retries counted separately.
+
+The spec keeps the two apart because they are different events. A transport retry
+is a request that never arrived and costs nothing but a repeat. A semantic repair
+is a second model call asking for a better answer after the first one did not
+satisfy the contract, and those are the calls that can quietly multiply cost and
+turn a miss into a plausible-looking wrong answer. A third category, giving up, is
+not a retry at all: it stops the batch and leaves the run unfinished.
+"""
+
+
+class AttemptBudget:
+    """Counts what a stage actually spent, so a report can say which kind it was."""
+
+    def __init__(self, limits: Mapping[str, int] | None = None):
+        self.limits = dict(limits or RETRY_LIMITS)
+        self.spent = {name: 0 for name in self.limits}
+
+    def take(self, kind: str) -> bool:
+        """Ask for one more attempt of this kind. False means the budget is gone."""
+
+        if kind not in self.limits:
+            raise ValueError(f"Unknown attempt kind: {kind!r}")
+        if self.spent[kind] >= self.limits[kind]:
+            return False
+        self.spent[kind] += 1
+        return True
+
+    def exhausted(self) -> list[str]:
+        return [name for name in self.limits if self.spent[name] >= self.limits[name]]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "spent": dict(self.spent),
+            "limits": dict(self.limits),
+            "exhausted": self.exhausted(),
+        }
+
+
 class RejectionCode:
     """Why a candidate never reaches a change set."""
 
@@ -692,6 +732,21 @@ def stage_provenance(notes: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
     return [dict(note[PROVENANCE_KEY]) for note in notes if PROVENANCE_KEY in note]
 
 
+def attempt_report(budget: AttemptBudget) -> dict[str, Any]:
+    """What a run spent on retries, in the two categories the spec separates."""
+
+    return {
+        "transport_retries": budget.spent.get("transport_retries", 0),
+        "semantic_repairs": budget.spent.get("semantic_repairs", 0),
+        "exhausted": budget.exhausted(),
+        "note": (
+            "A transport retry repeats a request that never arrived. A semantic repair asks the "
+            "model for a different answer after the first did not satisfy the contract. They are "
+            "counted apart because only the second can turn a miss into a plausible wrong answer."
+        ),
+    }
+
+
 def run_status(result: Mapping[str, Any]) -> str:
     """The one run state a result supports, and never `completed` with work outstanding.
 
@@ -704,7 +759,13 @@ def run_status(result: Mapping[str, Any]) -> str:
     unfinished = [str(name) for name in result.get("unfinished") or ()]
     status = str(result.get("status") or "")
     if unfinished:
-        return "failed" if status == "failed" else "extracting"
+        if status == "failed":
+            return "failed"
+        attempts = result.get("attempts")
+        exhausted = list(attempts.get("exhausted") or ()) if isinstance(attempts, Mapping) else []
+        # An unfinished batch with its retry budget spent cannot make progress, so
+        # reporting it as still extracting would invite a retry that will not help.
+        return "failed" if exhausted else "extracting"
     if status in RUN_STATES:
         return status
     if "batches" in result or "candidates" in result:
@@ -950,6 +1011,7 @@ def _extract_batches(
     candidates: list[ClaimCandidate] = []
     records: list[dict[str, Any]] = []
     unfinished: list[str] = []
+    budget = AttemptBudget()
 
     for batch in batches:
         batch_id = str(batch["batch_id"])
@@ -969,20 +1031,36 @@ def _extract_batches(
             "suspicious": screen_materials(materials),
             "notes": notes,
             "error": "",
+            "error_code": "",
         }
-        try:
-            request = wiki_prompts.build_role_request(
-                wiki_prompts.ROLE_DISCOVERY,
-                materials=materials,
-                purpose=purpose,
-                project_context=project_context,
-            )
-            answer = _invoke(roles.callable_for(wiki_prompts.ROLE_DISCOVERY), request, purpose, materials)
-            raw_candidates = _answer_candidates(answer, wiki_prompts.ROLE_DISCOVERY)
-        except Exception as error:  # a model boundary: any failure is a retryable batch
-            record["status"] = "unfinished"
-            record["error"] = f"{type(error).__name__}: {error}"
-            unfinished.append(batch_id)
+        request = wiki_prompts.build_role_request(
+            wiki_prompts.ROLE_DISCOVERY,
+            materials=materials,
+            purpose=purpose,
+            project_context=project_context,
+        )
+        answer: Any = None
+        raw_candidates: list[Any] = []
+        for attempt in range(2):
+            try:
+                answer = _invoke(roles.callable_for(wiki_prompts.ROLE_DISCOVERY), request, purpose, materials)
+                raw_candidates = _answer_candidates(answer, wiki_prompts.ROLE_DISCOVERY)
+                break
+            except Exception as error:  # a model boundary: a batch may be re-asked once
+                # One automatic retry per batch, counted as a transport retry because
+                # the request produced no usable answer rather than a wrong one. A
+                # second failure stops the batch, and the run stays unfinished.
+                if attempt == 0 and budget.take("transport_retries"):
+                    record["notes"].append({"stage": "discovery", "note": f"retrying after {type(error).__name__}"})
+                    continue
+                record["status"] = "unfinished"
+                record["error"] = f"{type(error).__name__}: {error}"
+                # The stable code is what a report counts by. The message may carry
+                # provider text, so it is not something to group on.
+                record["error_code"] = str(getattr(error, "code", "") or type(error).__name__)
+                unfinished.append(batch_id)
+                break
+        if record["status"] == "unfinished":
             records.append(record)
             continue
 
@@ -1013,7 +1091,12 @@ def _extract_batches(
         )
         records.append(record)
 
-    return {"candidates": candidates, "batches": records, "unfinished": unfinished}
+    return {
+        "candidates": candidates,
+        "batches": records,
+        "unfinished": unfinished,
+        "attempts": attempt_report(budget),
+    }
 
 
 def _stage_candidate(
