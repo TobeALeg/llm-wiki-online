@@ -47,7 +47,7 @@
 复现：`python -m unittest tests.test_acceptance_case_map`，报告在
 `evals/knowledge_v2/case_map.json`。
 
-## 3. 本次修掉的四个真实缺陷
+## 3. 本次修掉的真实缺陷
 
 这些都是先由测试或独立复核发现、再在**根因处**修掉的，不是绕过去。
 
@@ -65,6 +65,19 @@
 4. **未知顶层字段的 ChangeSet 被部分写入。** 一个夹带 `pages[]` 的 ChangeSet 会让旁边的
    claim 照常提交，v1 的写入形状因此可以从 v2 的入口溜进来。修法：顶层字段白名单，未知字段
    整体拒绝。
+5. **未注册 run 时提交直接失败。** 带 `dropped` 候选的 ChangeSet 写进 `stage_artifacts`，
+   而该表的 `run_id` 外键指向 `ingest_runs`，于是没有先 `create_run` 的调用整次提交被外键
+   挡住。修法：DROP 是知识判断不是运行产物，改记进独立的 `dispositions` 表。
+6. **审核动作写了一条多余的运行产物审计。** `review_decisions` 本身就是完整审计，而那条
+   多余的 `stage_artifacts` 写入正是让未注册 run 的审核永远无法解决的原因。删掉冗余写入。
+7. **生产 MCP 从没注册出 v2 工具。** `create_remote_mcp` 增加了 v2 参数，但
+   `create_company_mcp` 没有传，线上五个 v2 工具全部不可达。修法：工厂构造 v2 store 并传
+   全部回调，适配层测试断言这些工具存在。
+8. **同名的两个 `EvidenceError`。** `knowledge_types` 与 `evidence` 各定义一个，于是 Web 层
+   捕获的是另一个类，证据错误会漏成 500。修法：合成一个类，由 `knowledge_types` 定义、
+   `evidence` 再导出。
+9. **Web 的 v2 路由 pattern 只收 32 位十六进制**，而 evidence id 是 64 位，该路由对真实 id
+   永远匹配不上，只对不存在的 id 匹配。修法：同时接受两种宽度。
 
 另外修掉一个测试自身的资源泄漏（Windows 上删不掉被占用的临时数据库），它是基线里唯一的
 未解释失败。

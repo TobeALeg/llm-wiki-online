@@ -21,3 +21,9 @@ ts	phase	decision	why	evidence	result
 2026-09-17T14:40:00Z	verify	v1 页面链路保持不动，v2 编排放进新文件 knowledge_pipeline.py	规格明确禁止把 run_routed 改成表面返回 pages 内部写 Claim 的函数	git diff ba0d4bd 对 wiki_pipeline.py/core.py/store.py 为空	R1 约束满足
 2026-09-17T14:40:00Z	verify	全量套件 298 个用例全绿，生成副本与 canonical 字节一致	完成定义的前两条可证伪断言	reports/test-baseline.md	298 通过 0 失败 0 跳过，--check 无 stale
 2026-09-17T14:40:00Z	open	真实模型 holdout 三次运行未执行，真实材料 gold 未人工确认	缺 API key，且机器不能给自己签收质量标签	reports/knowledge-v2/release-report.md 第 5 节	标注未执行，且 run_eval 缺条件时拒绝出报告
+2026-09-17T15:00:00Z	audit	发现未注册 run 时带 dropped 候选的提交被外键整体挡住	stage_artifacts 的 run_id 外键指向 ingest_runs，而 DROP 是知识判断不是运行产物	dispositions 表	提交成功，理由码可按项目读回
+2026-09-17T15:02:00Z	audit	发现审核动作里那条多余的运行产物审计让未注册 run 的审核永远无法解决	review_decisions 已经是完整审计，多写的一行 stage_artifacts 反而成了阻断	claim_store.py::review_action	retain 不再写任何运行产物，V01 改读 review_decisions
+2026-09-17T15:06:00Z	audit	发现生产 MCP 从没注册出 v2 工具	create_remote_mcp 加了参数但 create_company_mcp 没传，线上五个工具全部不可达	server.py::create_company_mcp	适配层测试断言之，8 个用例通过
+2026-09-17T15:08:00Z	audit	发现两个同名的 EvidenceError，Web 层捕获的是另一个类	证据错误会漏成 500，而不是带错误码的 409	knowledge_types 定义、evidence 再导出	同一类，except 全都能抓到
+2026-09-17T15:10:00Z	audit	发现 Web 的 v2 路由 pattern 只收 32 位十六进制	evidence id 是 64 位，该路由对真实 id 永远匹配不上，只对不存在的 id 匹配	webapp.py 的 _ID_DIGEST	同时接受两种宽度
+2026-09-17T15:12:00Z	verify	全量套件 306 个用例全绿，56/56 用例映射不变	完成定义的前两条可证伪断言	reports/test-baseline.md	306 通过 0 失败 0 跳过
