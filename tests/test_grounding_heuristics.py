@@ -229,5 +229,62 @@ class DenialScopeTests(unittest.TestCase):
         self.assertEqual("有有", pipeline.ANOT_A_RE.sub(pipeline._NOT_A_NOT, "有没有"))
 
 
+class ReviewQuestionLanguageTests(unittest.TestCase):
+    """A review question is what a person acts on, so it is in their language.
+
+    Found by running a Chinese business plan through the real pipeline: every review
+    it opened asked its question in English. The mirror case matters too, so the
+    choice is made from the statement being reviewed rather than hard-coded.
+    """
+
+    def test_a_chinese_statement_gets_a_chinese_question(self):
+        question = pipeline.review_question("insufficient_context", "企业无需从零建模。")
+        self.assertIn("材料", question)
+        self.assertNotIn("proposition", question)
+
+    def test_an_english_statement_gets_an_english_question(self):
+        question = pipeline.review_question(
+            "insufficient_context", "The harness may own deployment."
+        )
+        self.assertIn("proposition", question)
+
+    def test_a_statement_with_a_product_name_still_counts_as_chinese(self):
+        question = pipeline.review_question("ambiguous_adoption", "助手建议用 SQLite 做缓存。")
+        self.assertIn("采纳", question)
+
+    def test_an_empty_statement_falls_back_to_english(self):
+        self.assertEqual("en", pipeline.statement_language(""))
+        self.assertEqual("en", pipeline.statement_language("   "))
+
+    def test_every_trigger_code_has_both_languages(self):
+        for code, templates in pipeline.REVIEW_QUESTIONS.items():
+            with self.subTest(code=code):
+                self.assertEqual({"zh", "en"}, set(templates))
+        self.assertEqual({"zh", "en"}, set(pipeline.REVIEW_QUESTION_DEFAULT))
+
+    def test_an_unknown_trigger_falls_back_rather_than_returning_nothing(self):
+        question = pipeline.review_question("something_new", "企业无需从零建模。")
+        self.assertEqual(pipeline.REVIEW_QUESTION_DEFAULT["zh"], question)
+
+    def test_the_missing_qualifier_case_carries_the_qualifiers_it_names(self):
+        question = pipeline.review_question(
+            "missing_qualifier", "新平台迁移适用于所有生产环境", detail="原文限定：仅限当前项目"
+        )
+        self.assertIn("仅限当前项目", question)
+        self.assertIn("限定", question)
+
+    def test_the_disposition_route_uses_the_same_helper(self):
+        from llm_wiki_mcp.knowledge_types import ClaimCandidate, ClaimState
+
+        candidate = ClaimCandidate(
+            statement="企业无需从零建模。",
+            state=ClaimState(
+                knowledge_kind="judgment", derivation="explicit", epistemic_status="asserted"
+            ),
+            reason_codes=("insufficient_context",),
+        )
+        self.assertIn("材料", pipeline._review_question(candidate))
+
+
 if __name__ == "__main__":
     unittest.main()

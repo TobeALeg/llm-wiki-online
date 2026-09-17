@@ -245,6 +245,14 @@ def draft_negative(
 
 
 def draft_review(*, item: Mapping[str, Any], group: Mapping[str, Any], index: int) -> dict[str, Any]:
+    # The question is rendered here from the trigger code, so a report generated
+    # before the question templates gained a language still reads in the material's
+    # language. Re-rendering costs nothing.
+    candidates = item.get("candidates") if isinstance(item.get("candidates"), Mapping) else {}
+    statement = str((candidates or {}).get("statement") or item.get("question") or "")
+    question = knowledge_pipeline.review_question(
+        str(item.get("trigger_code") or ""), statement
+    )
     return {
         "unit_id": f"{group['group_id']}-review-{index:03d}",
         "group_id": group["group_id"],
@@ -252,7 +260,8 @@ def draft_review(*, item: Mapping[str, Any], group: Mapping[str, Any], index: in
         "project_id": "bp",
         "must_keep": None,
         "requires_review": True,
-        "expected_meaning": str(item.get("question") or ""),
+        "expected_meaning": question,
+        "question_as_stored": str(item.get("question") or ""),
         "required_qualifiers": [],
         "forbidden_assertions": [],
         "allowed_kinds": [],
