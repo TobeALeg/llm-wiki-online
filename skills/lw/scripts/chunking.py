@@ -5,25 +5,37 @@ model, tagged with the ATX heading path that was in effect where it started.
 Chunks come out in document order and never overlap, so a long file is read from
 its first byte to its last instead of being excerpted.
 
-``start``/``end`` always identify the original bytes a chunk covers, and
+Offsets are counted in Unicode code points over the saved normalized text, and
+``[start, end)`` is half-open.  Python strings index by code point, so
+``text[start:end]`` is the whole translation; UTF-8 or UTF-16 lengths are never
+mixed in.
+
+``start``/``end`` always identify the original text a chunk covers, and
 ``text`` is what the model sees.  For a heading, a paragraph, or a character
-run the two agree and ``verbatim`` is True.  For an oversized code fence or
-table they do not: each piece repeats the opening fence or the header and
-separator rows so it can stand alone, and ``start``/``end`` cover only the
-content lines that piece carries.  Keeping the range separate from the rendered
-text is what lets a reader click from a chunk back to the original bytes.
+run the two agree, ``verbatim`` is True, and ``render_recipe`` is
+``verbatim``.  For an oversized code fence or table they do not: each piece
+repeats the opening fence or the header and separator rows so it can stand
+alone, ``start``/``end`` cover only the content lines that piece carries, and
+the recipe names the reconstruction.  ``evidence_spans`` lists what is really
+in the source; ``context_spans`` lists the lines the renderer re-emitted.  That
+split is what keeps a fabricated fence from being cited as source text.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 PARSER_NAME = "structural"
 PARSER_VERSION = "1"
 TARGET_CHUNK_CHARS = 12_000
 MAX_CHUNK_CHARS = 16_000
+
+RECIPE_VERBATIM = "verbatim"
+RECIPE_TABLE_WITH_HEADER = "table_with_header"
+RECIPE_CODE_WITH_FENCE = "code_with_fence"
+RECIPE_CHARACTER_WINDOW = "character_window"
 
 _DOMAIN = "llm-wiki/chunking"
 _FIELD_SEP = "\x00"
@@ -35,6 +47,16 @@ _PIPE_START_RE = re.compile(r"^ {0,3}\|")
 
 _SENTENCE_ENDINGS = "。！？!?."
 
+_FOOTNOTE_PREFIXES = ("[^", "*", "†", "‡", "注", "Note:", "note:")
+
+OFFSET_UNIT = "unicode_code_point"
+"""Coordinates are Unicode code points over the saved normalized text.
+
+Repeated verbatim from `evidence.py` rather than imported, because this module
+ships standalone inside the skill package and imports no sibling. A test asserts
+the two constants agree.
+"""
+
 
 @dataclass(frozen=True)
 class Chunk:
@@ -45,6 +67,32 @@ class Chunk:
     heading_path: tuple[str, ...]
     text: str
     verbatim: bool
+    evidence_spans: tuple[tuple[int, int], ...] = ()
+    context_spans: tuple[tuple[int, int], ...] = ()
+    render_recipe: str = RECIPE_VERBATIM
+    render_notes: tuple[str, ...] = ()
+
+    def evidence(self) -> tuple[tuple[int, int], ...]:
+        """The ranges a reader can verify against the source.
+
+        Falls back to the covered range so a chunk built before this metadata
+        existed still names something real rather than nothing.
+        """
+
+        return self.evidence_spans or ((self.start, self.end),)
+
+
+@dataclass(frozen=True)
+class _Piece:
+    """One chunk's worth of text plus how it was addressed and reconstructed."""
+
+    start: int
+    end: int
+    text: str
+    evidence_spans: tuple[tuple[int, int], ...]
+    context_spans: tuple[tuple[int, int], ...] = ()
+    recipe: str = RECIPE_VERBATIM
+    notes: tuple[str, ...] = ()
 
 
 @dataclass
@@ -60,6 +108,7 @@ class _Block:
     header_line: tuple[int, int] | None = None
     separator_line: tuple[int, int] | None = None
     body_lines: tuple[tuple[int, int], ...] = ()
+    footnote_lines: tuple[int, ...] = field(default=())
 
 
 def chunk_text(
@@ -160,6 +209,28 @@ def _emit(
             heading_path=path,
             text=body,
             verbatim=body == text[start:end],
+            evidence_spans=((start, end),),
+            context_spans=(),
+            render_recipe=RECIPE_VERBATIM,
+        )
+    )
+
+
+def _emit_piece(chunks: list[Chunk], text: str, path: tuple[str, ...], piece: _Piece) -> None:
+    index = len(chunks) + 1
+    chunks.append(
+        Chunk(
+            chunk_id=f"chunk-{index:03d}",
+            index=index,
+            start=piece.start,
+            end=piece.end,
+            heading_path=path,
+            text=piece.text,
+            verbatim=piece.text == text[piece.start : piece.end],
+            evidence_spans=piece.evidence_spans,
+            context_spans=piece.context_spans,
+            render_recipe=piece.recipe,
+            render_notes=piece.notes,
         )
     )
 
@@ -167,68 +238,117 @@ def _emit(
 def _emit_oversized(
     chunks: list[Chunk], text: str, block: _Block, max_chars: int
 ) -> None:
-    for start, end, body in _oversized_pieces(text, block, max_chars):
-        _emit(chunks, text, start, end, block.path, body)
+    for piece in _oversized_pieces(text, block, max_chars):
+        _emit_piece(chunks, text, block.path, piece)
 
 
-def _oversized_pieces(
-    text: str, block: _Block, max_chars: int
-) -> list[tuple[int, int, str]]:
+def _oversized_pieces(text: str, block: _Block, max_chars: int) -> list[_Piece]:
     if block.kind == "code":
         return _code_pieces(text, block, max_chars)
     if block.kind == "table":
         return _table_pieces(text, block, max_chars)
-    return _triples(text, _paragraph_pieces(text, block.start, block.end, max_chars))
+    return _windowed_pieces(text, _paragraph_pieces(text, block.start, block.end, max_chars))
 
 
-def _triples(text: str, spans: list[tuple[int, int]]) -> list[tuple[int, int, str]]:
-    return [(start, end, text[start:end]) for start, end in spans]
+def _windowed_pieces(text: str, spans: list[tuple[int, int]]) -> list[_Piece]:
+    return [
+        _Piece(
+            start=start,
+            end=end,
+            text=text[start:end],
+            evidence_spans=((start, end),),
+            recipe=RECIPE_CHARACTER_WINDOW,
+            notes=("long_paragraph_windowed",),
+        )
+        for start, end in spans
+    ]
 
 
-def _code_pieces(text: str, block: _Block, max_chars: int) -> list[tuple[int, int, str]]:
+def _code_pieces(text: str, block: _Block, max_chars: int) -> list[_Piece]:
     assert block.open_line is not None
     opening = _line_text(text, block.open_line)
-    closing = _line_text(text, block.close_line) if block.close_line else opening
+    closing_line = block.close_line
+    closing = _line_text(text, closing_line) if closing_line else opening
+    # An unterminated fence has no closing line in the source. The renderer still
+    # emits one so the piece is readable, and the note records that it is ours.
+    closing_is_source = closing_line is not None
     lines = [_line_text(text, span) for span in block.body_lines]
     budget = max_chars - (len(opening) + len(closing) + 2)
     if budget < 1 or any(len(line) > budget for line in lines):
-        return _triples(text, _character_pieces(text, block.start, block.end, max_chars))
+        return [
+            _Piece(
+                start=start,
+                end=end,
+                text=text[start:end],
+                evidence_spans=((start, end),),
+                recipe=RECIPE_CHARACTER_WINDOW,
+                notes=("code_windowed_verbatim",),
+            )
+            for start, end in _character_pieces(text, block.start, block.end, max_chars)
+        ]
 
-    pieces: list[tuple[int, int, str]] = []
+    pieces: list[_Piece] = []
     group: list[int] = []
     used = 0
     for position, line in enumerate(lines):
         cost = len(line) + (1 if group else 0)
         if group and used + cost > budget:
-            pieces.append(_code_piece(text, block, group, opening, closing))
+            pieces.append(_code_piece(text, block, group, opening, closing, closing_is_source))
             group, used = [], 0
             cost = len(line)
         group.append(position)
         used += cost
     if group:
-        pieces.append(_code_piece(text, block, group, opening, closing))
+        pieces.append(_code_piece(text, block, group, opening, closing, closing_is_source))
     return pieces
 
 
 def _code_piece(
-    text: str, block: _Block, group: list[int], opening: str, closing: str
-) -> tuple[int, int, str]:
-    spans = [block.body_lines[position] for position in group]
-    start, end = _covered_range(text, spans)
+    text: str,
+    block: _Block,
+    group: list[int],
+    opening: str,
+    closing: str,
+    closing_is_source: bool,
+) -> _Piece:
+    spans = tuple(block.body_lines[position] for position in group)
+    start, end = _covered_range(text, list(spans))
     body = "\n".join([opening, *[_line_text(text, span) for span in spans], closing])
-    return start, end, body
+    context = (block.open_line,) if block.open_line else ()
+    if closing_is_source and block.close_line:
+        context = (*context, block.close_line)
+    notes = ["fence_repeated"] if closing_is_source else ["fence_closed_synthesized"]
+    return _Piece(
+        start=start,
+        end=end,
+        text=body,
+        evidence_spans=spans,
+        context_spans=context,
+        recipe=RECIPE_CODE_WITH_FENCE,
+        notes=tuple(notes),
+    )
 
 
-def _table_pieces(text: str, block: _Block, max_chars: int) -> list[tuple[int, int, str]]:
+def _table_pieces(text: str, block: _Block, max_chars: int) -> list[_Piece]:
     assert block.header_line is not None and block.separator_line is not None
     header = _line_text(text, block.header_line)
     separator = _line_text(text, block.separator_line)
     rows = [_line_text(text, span) for span in block.body_lines]
     budget = max_chars - (len(header) + len(separator) + 2)
     if budget < 1 or not rows or any(len(row) > budget for row in rows):
-        return _triples(text, _character_pieces(text, block.start, block.end, max_chars))
+        return [
+            _Piece(
+                start=start,
+                end=end,
+                text=text[start:end],
+                evidence_spans=((start, end),),
+                recipe=RECIPE_CHARACTER_WINDOW,
+                notes=("table_windowed_verbatim",),
+            )
+            for start, end in _character_pieces(text, block.start, block.end, max_chars)
+        ]
 
-    pieces: list[tuple[int, int, str]] = []
+    pieces: list[_Piece] = []
     group: list[int] = []
     used = 0
     for position, row in enumerate(rows):
@@ -246,11 +366,19 @@ def _table_pieces(text: str, block: _Block, max_chars: int) -> list[tuple[int, i
 
 def _table_piece(
     text: str, block: _Block, group: list[int], header: str, separator: str
-) -> tuple[int, int, str]:
-    spans = [block.body_lines[position] for position in group]
-    start, end = _covered_range(text, spans)
+) -> _Piece:
+    spans = tuple(block.body_lines[position] for position in group)
+    start, end = _covered_range(text, list(spans))
     body = "\n".join([header, separator, *[_line_text(text, span) for span in spans]])
-    return start, end, body
+    return _Piece(
+        start=start,
+        end=end,
+        text=body,
+        evidence_spans=spans,
+        context_spans=(block.header_line, block.separator_line),  # type: ignore[arg-type]
+        recipe=RECIPE_TABLE_WITH_HEADER,
+        notes=("header_repeated", "separator_repeated"),
+    )
 
 
 def _paragraph_pieces(
@@ -403,6 +531,16 @@ def _scan_table(
         body.append(lines[cursor])
         cursor += 1
 
+    # A table's units live in the marked lines under it as often as in the header.
+    footnotes: list[int] = []
+    probe = cursor
+    while probe < len(lines):
+        stripped = _line_text(text, lines[probe]).strip()
+        if not stripped or not stripped.startswith(_FOOTNOTE_PREFIXES):
+            break
+        footnotes.append(probe)
+        probe += 1
+
     block_end = body[-1][1] if body else separator[1]
     blocks.append(
         _Block(
@@ -412,6 +550,7 @@ def _scan_table(
             header_line=header,
             separator_line=separator,
             body_lines=tuple(body),
+            footnote_lines=tuple(footnotes),
         )
     )
     return cursor
@@ -508,3 +647,55 @@ def _covered_range(
     if end <= start:
         end = min(len(text), start + 1)
     return start, end
+
+
+def artifact_structure(text: str) -> dict:
+    """The block index saved beside a parse artifact.
+
+    Reading a table's header and units, or a code block's real definition, is
+    what a citation needs and what re-running a parser would otherwise be
+    required for. Saving this index with the artifact means an old citation
+    still resolves on a machine where that parser is gone.
+    """
+
+    lines = _line_spans(text)
+    entries: list[dict] = []
+    stack: list[str] = []
+    for block in _scan(text):
+        if block.kind == "heading":
+            stack = stack[: block.level - 1] + [block.heading_text]
+            block.path = tuple(stack)
+        else:
+            block.path = tuple(stack)
+
+        entry: dict = {
+            "kind": block.kind,
+            "start": block.start,
+            "end": block.end,
+            "heading_path": list(block.path),
+        }
+        if block.kind == "heading":
+            entry["level"] = block.level
+            entry["heading_text"] = block.heading_text
+        elif block.kind == "code":
+            context = [block.open_line]
+            if block.close_line:
+                context.append(block.close_line)
+            entry["context_spans"] = [[span[0], span[1]] for span in context if span]
+            entry["fence_unterminated"] = block.close_line is None
+        elif block.kind == "table":
+            entry["context_spans"] = [
+                [block.header_line[0], block.header_line[1]],
+                [block.separator_line[0], block.separator_line[1]],
+            ]
+            entry["footnote_lines"] = list(block.footnote_lines)
+        entries.append(entry)
+
+    return {
+        "offset_unit": OFFSET_UNIT,
+        "parser_name": PARSER_NAME,
+        "parser_version": PARSER_VERSION,
+        "line_count": len(lines),
+        "lines": [[start, end] for start, end in lines],
+        "blocks": entries,
+    }

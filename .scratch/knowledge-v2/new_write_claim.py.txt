@@ -1,0 +1,312 @@
+    def _write_claim(
+        self,
+        *,
+        db: sqlite3.Connection,
+        scope: Scope,
+        claim: Mapping[str, Any],
+        actor_subject: str,
+        knowledge_version: int,
+        stamp: str,
+    ) -> tuple[str, bool, bool]:
+        """Write one claim. Returns (claim_id, created, unchanged).
+
+        A second import of the same material must not mint a version. It earns one
+        only when the wording, the qualifiers, the status axes, the attribution or
+        the evidence set actually changed.
+
+        When the proposition is unchanged and only the evidence grew, the previous
+        origins carry forward. Two independent sources then stay two independent
+        support groups on one version, which is what lets one of them be withdrawn
+        without the claim losing its support. A changed statement carries nothing
+        forward, because old grounding must never be reused for new wording.
+        """
+
+        state = ClaimState.from_dict(claim["state"])
+        statement = str(claim["statement"]).strip()
+        if not statement:
+            raise ClaimStoreError("A claim needs a statement.")
+        conditions = tuple(str(item) for item in claim.get("conditions", ()))
+        fingerprint = statement_fingerprint(scope, statement, conditions)
+
+        claim_id, existing_claim = self._resolve_claim_id(db, scope, claim, fingerprint)
+        current_version_id = existing_claim["current_version_id"] if existing_claim else None
+
+        if current_version_id and self._claim_unchanged(
+            db=db,
+            claim_version_id=current_version_id,
+            claim=claim,
+            state=state,
+            statement=statement,
+            conditions=conditions,
+        ):
+            return claim_id, False, True
+
+        if current_version_id:
+            latest = db.execute(
+                "SELECT MAX(version) AS version FROM claim_versions WHERE claim_id = ?", (claim_id,)
+            ).fetchone()
+            version_number = int(latest["version"]) + 1
+            created_now = False
+        else:
+            version_number = 1
+            created_now = True
+            db.execute(
+                "INSERT INTO claims(claim_id, knowledge_space_id, project_id, fingerprint, current_version_id, lifecycle_status, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)",
+                (
+                    claim_id,
+                    scope.knowledge_space_id,
+                    scope.project_id,
+                    fingerprint,
+                    state.lifecycle_status,
+                    stamp,
+                    stamp,
+                ),
+            )
+
+        # The store mints this. A model that echoed an id back gets a fresh one,
+        # which is what keeps a fabricated version from becoming authoritative.
+        claim_version_id = new_id("clv_")
+        attribution = claim.get("attribution", {}) or {}
+        db.execute(
+            """INSERT INTO claim_versions(
+                   claim_version_id, claim_id, knowledge_space_id, project_id, version, statement,
+                   knowledge_kind, derivation, epistemic_status, lifecycle_status, grounding_status,
+                   decision_state, question_state, conditions_json, asserted_by, asserted_at,
+                   asserted_at_precision, valid_from, valid_to, attributes_json, created_at,
+                   committed_at, actor_subject, knowledge_version)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                claim_version_id,
+                claim_id,
+                scope.knowledge_space_id,
+                scope.project_id,
+                version_number,
+                statement,
+                state.knowledge_kind,
+                state.derivation,
+                state.epistemic_status,
+                state.lifecycle_status,
+                state.grounding_status,
+                state.decision_state,
+                state.question_state,
+                _json(list(conditions)),
+                str(attribution.get("asserted_by", "unknown")),
+                attribution.get("asserted_at"),
+                str(attribution.get("asserted_at_precision", "unknown")),
+                claim.get("valid_from"),
+                claim.get("valid_to"),
+                _json(claim.get("attributes", {})),
+                stamp,
+                stamp,
+                actor_subject,
+                knowledge_version,
+            ),
+        )
+        for position, subject in enumerate(claim.get("subjects", ())):
+            db.execute(
+                "INSERT OR IGNORE INTO claim_subjects(claim_version_id, subject, position) VALUES (?, ?, ?)",
+                (claim_version_id, str(subject), position),
+            )
+
+        for origin in self._carried_origins(
+            db=db, parent_version_id=current_version_id, statement=statement, conditions=conditions
+        ):
+            self._write_origin(
+                db=db,
+                scope=scope,
+                claim_version_id=claim_version_id,
+                origin=origin,
+                default_asserted_by=str(attribution.get("asserted_by", "unknown")),
+                stamp=stamp,
+            )
+
+        for origin in claim.get("origins", ()):
+            self._write_origin(
+                db=db,
+                scope=scope,
+                claim_version_id=claim_version_id,
+                origin=origin,
+                default_asserted_by=str(attribution.get("asserted_by", "unknown")),
+                stamp=stamp,
+            )
+
+        db.execute(
+            "UPDATE claims SET current_version_id = ?, updated_at = ?, lifecycle_status = ? WHERE claim_id = ?",
+            (claim_version_id, stamp, state.lifecycle_status, claim_id),
+        )
+        return claim_id, created_now, False
+
+    def _resolve_claim_id(
+        self,
+        db: sqlite3.Connection,
+        scope: Scope,
+        claim: Mapping[str, Any],
+        fingerprint: str,
+    ) -> tuple[str, sqlite3.Row | None]:
+        """Find the claim this proposition belongs to, or mint a new identity."""
+
+        requested_id = claim.get("claim_id")
+        if requested_id is None:
+            existing = db.execute(
+                "SELECT claim_id, current_version_id FROM claims WHERE project_id = ? AND fingerprint = ? AND lifecycle_status = 'active'",
+                (scope.project_id, fingerprint),
+            ).fetchone()
+            if existing:
+                return existing["claim_id"], existing
+            return new_id("clm_"), None
+        if not CLAIM_ID_PATTERN.fullmatch(str(requested_id)):
+            raise ClaimStoreError(f"Malformed claim id: {requested_id!r}.")
+        # An id that already belongs to this project is honoured only when the
+        # caller is updating it. An id the store never issued is not created.
+        row = db.execute(
+            "SELECT claim_id, current_version_id FROM claims WHERE claim_id = ? AND project_id = ?",
+            (requested_id, scope.project_id),
+        ).fetchone()
+        if not row:
+            raise ScopeError(f"Claim {requested_id} does not exist in project {scope.project_id}.")
+        return str(requested_id), row
+
+    @staticmethod
+    def _carried_origins(
+        *,
+        db: sqlite3.Connection,
+        parent_version_id: str | None,
+        statement: str,
+        conditions: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        """The prior origins of a proposition whose meaning has not changed."""
+
+        if not parent_version_id:
+            return []
+        parent = db.execute(
+            "SELECT statement, conditions_json FROM claim_versions WHERE claim_version_id = ?",
+            (parent_version_id,),
+        ).fetchone()
+        if not parent:
+            return []
+        if parent["statement"] != statement or json.loads(parent["conditions_json"]) != list(conditions):
+            return []
+        rows = db.execute(
+            "SELECT * FROM claim_origins WHERE claim_version_id = ? ORDER BY created_at, origin_id",
+            (parent_version_id,),
+        ).fetchall()
+        carried: list[dict[str, Any]] = []
+        for row in rows:
+            evidence = db.execute(
+                "SELECT evidence_id FROM claim_evidence WHERE origin_id = ? ORDER BY position",
+                (row["origin_id"],),
+            ).fetchall()
+            premises = db.execute(
+                """SELECT requirement_id FROM claim_support_requirements
+                   WHERE claim_version_id = ? AND support_group_id = ? AND requirement_kind = 'claim_version'
+                   ORDER BY position""",
+                (parent_version_id, row["support_group_id"]),
+            ).fetchall()
+            carried.append(
+                {
+                    "derivation": row["derivation"],
+                    "inference_note": row["inference_note"],
+                    "assumptions": json.loads(row["assumptions_json"]),
+                    "support_group_id": row["support_group_id"],
+                    "origin_status": row["origin_status"],
+                    "asserted_by": row["asserted_by"],
+                    "asserted_at": row["asserted_at"],
+                    "evidence_refs": [item["evidence_id"] for item in evidence],
+                    "premise_claim_version_ids": [item["requirement_id"] for item in premises],
+                }
+            )
+        return carried
+
+    def _write_origin(
+        self,
+        *,
+        db: sqlite3.Connection,
+        scope: Scope,
+        claim_version_id: str,
+        origin: Mapping[str, Any],
+        default_asserted_by: str,
+        stamp: str,
+    ) -> str:
+        """Write one origin with its evidence links and support requirements."""
+
+        origin_id = new_id("org_")
+        support_group_id = str(origin.get("support_group_id") or new_id("sgr_"))
+        db.execute(
+            """INSERT INTO claim_origins(
+                   origin_id, claim_version_id, derivation, inference_note, assumptions_json,
+                   support_group_id, origin_status, asserted_by, asserted_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                origin_id,
+                claim_version_id,
+                str(origin.get("derivation", "explicit")),
+                str(origin.get("inference_note", "")),
+                _json(list(origin.get("assumptions", ()))),
+                support_group_id,
+                str(origin.get("origin_status", "active")),
+                str(origin.get("asserted_by", default_asserted_by)),
+                origin.get("asserted_at"),
+                stamp,
+            ),
+        )
+        for position, evidence_id in enumerate(origin.get("evidence_refs", ())):
+            owner = db.execute(
+                "SELECT project_id FROM evidence_refs WHERE evidence_id = ?", (evidence_id,)
+            ).fetchone()
+            if not owner:
+                raise ClaimStoreError(f"Unknown evidence reference: {evidence_id}.")
+            # The composite foreign key would catch this too. Checking first turns a
+            # constraint violation into a named scope error a caller can act on.
+            if owner["project_id"] != scope.project_id:
+                raise ScopeError(
+                    f"Evidence {evidence_id} belongs to project {owner['project_id']}, not {scope.project_id}."
+                )
+            db.execute(
+                "INSERT INTO claim_evidence(origin_id, knowledge_space_id, project_id, evidence_id, position) VALUES (?, ?, ?, ?, ?)",
+                (origin_id, scope.knowledge_space_id, scope.project_id, evidence_id, position),
+            )
+            db.execute(
+                """INSERT OR REPLACE INTO claim_support_requirements(
+                       support_group_id, claim_version_id, requirement_kind, requirement_id, position, available)
+                   VALUES (?, ?, 'evidence', ?, ?, ?)""",
+                (
+                    support_group_id,
+                    claim_version_id,
+                    evidence_id,
+                    position,
+                    _as_bool(self._evidence_available(db, evidence_id)),
+                ),
+            )
+        for position, premise in enumerate(origin.get("premise_claim_version_ids", ())):
+            if not str(premise).startswith("clv_"):
+                raise ClaimStoreError(f"Malformed premise id: {premise!r}.")
+            row = db.execute(
+                "SELECT project_id FROM claim_versions WHERE claim_version_id = ?", (premise,)
+            ).fetchone()
+            if not row:
+                raise ClaimStoreError(f"Unknown premise claim version: {premise}.")
+            if row["project_id"] != scope.project_id:
+                raise ScopeError(
+                    f"Premise {premise} belongs to project {row['project_id']}, not {scope.project_id}."
+                )
+            db.execute(
+                """INSERT OR REPLACE INTO claim_support_requirements(
+                       support_group_id, claim_version_id, requirement_kind, requirement_id, position, available)
+                   VALUES (?, ?, 'claim_version', ?, ?, 1)""",
+                (support_group_id, claim_version_id, premise, position),
+            )
+
+        premise_ids = list(origin.get("premise_claim_version_ids", ()))
+        if premise_ids:
+            edges = db.execute(
+                "SELECT from_claim_version_id, to_claim_version_id FROM claim_relations WHERE relation_type = 'derived_from'"
+            ).fetchall()
+            prospective = [(row["from_claim_version_id"], row["to_claim_version_id"]) for row in edges]
+            prospective.extend((claim_version_id, premise) for premise in premise_ids)
+            cycle = find_derivation_cycle([claim_version_id, *premise_ids], prospective)
+            if cycle:
+                raise ClaimStoreError(
+                    "A derivation cycle would be created: " + " -> ".join(cycle) + "."
+                )
+        return origin_id
+

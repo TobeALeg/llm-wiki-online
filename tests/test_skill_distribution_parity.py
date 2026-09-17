@@ -5,12 +5,14 @@ packaged MCP actually executes (see `llm_wiki_mcp.service.engine_path`). Both ar
 by hand, so a fix applied to one and not the other silently ships a different engine.
 This walks both trees and fails on any difference.
 
-`chunking.py` ships a third time inside the server package, at
-`llm_wiki_mcp/chunking.py`, because the server has to import the same chunker the CLI
-runs rather than growing a second implementation. The two skill trees keep it beside
-`wiki.py` for its script-relative `import chunking`, so all three stay byte-identical.
+The v2 core ships a third time inside the server package, at
+`llm_wiki_mcp/<module>.py`, for the same reason: the server imports the one
+implementation rather than growing a second. `scripts/sync_skill_distribution.py`
+generates the vendored copies and its module list is read here, so the check and the
+generator cannot disagree about which files are owned.
 """
 
+import importlib.util
 import sys
 import unittest
 from pathlib import Path
@@ -21,8 +23,20 @@ sys.path.insert(0, str(REPO_ROOT / "plugins" / "llm-wiki"))
 
 SOURCE = REPO_ROOT / "skills" / "lw"
 DISTRIBUTED = REPO_ROOT / "plugins" / "llm-wiki" / "skills" / "lw"
-PACKAGED_CHUNKER = REPO_ROOT / "plugins" / "llm-wiki" / "llm_wiki_mcp" / "chunking.py"
+PACKAGE = REPO_ROOT / "plugins" / "llm-wiki" / "llm_wiki_mcp"
 IGNORED = {"__pycache__"}
+
+
+def _load_sync_module():
+    spec = importlib.util.spec_from_file_location(
+        "sync_skill_distribution", REPO_ROOT / "scripts" / "sync_skill_distribution.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+SYNC = _load_sync_module()
 
 
 def relative_files(root):
@@ -55,7 +69,18 @@ class SkillDistributionTests(unittest.TestCase):
             differing,
             [],
             "these files differ between skills/lw and plugins/llm-wiki/skills/lw; "
-            "sync them (the running MCP uses the plugin copy)",
+            "run scripts/sync_skill_distribution.py (the running MCP uses the plugin copy)",
+        )
+
+    def test_the_generated_copies_match_their_canonical_sources(self):
+        stale = [
+            path.relative_to(REPO_ROOT).as_posix()
+            for path in SYNC._stale(SYNC._plan())
+        ]
+        self.assertEqual(
+            stale,
+            [],
+            "these generated files are out of date; run scripts/sync_skill_distribution.py",
         )
 
     def test_the_engine_the_mcp_runs_is_the_distributed_copy(self):
@@ -67,16 +92,73 @@ class SkillDistributionTests(unittest.TestCase):
             "the MCP must execute the distributed copy of the engine",
         )
 
-    def test_the_packaged_chunker_matches_both_skill_copies(self):
-        packaged = PACKAGED_CHUNKER.read_bytes()
-        for tree in (SOURCE, DISTRIBUTED):
-            shipped = (tree / "scripts" / "chunking.py").read_bytes()
-            self.assertEqual(
-                packaged,
-                shipped,
-                f"llm_wiki_mcp/chunking.py differs from {tree}/scripts/chunking.py; "
-                "the server and the CLI must run one chunker, not two",
-            )
+    def test_every_vendored_core_module_matches_both_skill_copies(self):
+        for name in SYNC.VENDORED_MODULES:
+            canonical = PACKAGE / name
+            if not canonical.exists():
+                continue
+            with self.subTest(module=name):
+                packaged = canonical.read_bytes()
+                for tree in (SOURCE, DISTRIBUTED):
+                    shipped = (tree / "scripts" / name).read_bytes()
+                    self.assertEqual(
+                        packaged,
+                        shipped,
+                        f"llm_wiki_mcp/{name} differs from {tree}/scripts/{name}; "
+                        "the server and the CLI must run one implementation, not two",
+                    )
+
+    def test_every_vendored_core_module_is_standard_library_only(self):
+        """A clean skill install has no plugin dependencies available.
+
+        The vendored copies are what `/lw` loads when nothing was pip-installed, so a
+        third-party import here would only surface on a machine that never ran the dev
+        setup, which is the one place the suite cannot reach.
+        """
+
+        siblings = {name.removesuffix(".py") for name in SYNC.VENDORED_MODULES}
+        allowed = {
+            "__future__",
+            "collections",
+            "contextlib",
+            "dataclasses",
+            "datetime",
+            "hashlib",
+            "json",
+            "pathlib",
+            "re",
+            "sqlite3",
+            "typing",
+            "unicodedata",
+            "uuid",
+        }
+        for name in SYNC.VENDORED_MODULES:
+            canonical = PACKAGE / name
+            if not canonical.exists():
+                continue
+            with self.subTest(module=name):
+                imported = set()
+                for line in canonical.read_text(encoding="utf-8").splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith("import "):
+                        imported.add(stripped[len("import "):].split()[0].split(".")[0])
+                    elif stripped.startswith("from ") and " import " in stripped:
+                        module = stripped[len("from "):].split(" import ")[0].strip()
+                        # A relative import names a vendored sibling, which
+                        # travels with this file, so it is not a dependency.
+                        if module.startswith("."):
+                            continue
+                        root = module.split(".")[0]
+                        # A sibling that is vendored alongside this file travels
+                        # with it, so it is not an external dependency either.
+                        if root in siblings:
+                            continue
+                        imported.add(root)
+                self.assertEqual(
+                    sorted(imported - allowed),
+                    [],
+                    f"{name} imports something outside the standard-library allowlist",
+                )
 
     def test_the_server_can_import_the_chunker_as_a_module(self):
         import llm_wiki_mcp.chunking as module
