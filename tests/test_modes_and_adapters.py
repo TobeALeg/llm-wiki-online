@@ -147,6 +147,41 @@ class ModeParityTests(unittest.TestCase):
         self.assertNotEqual(local_store.database, shared_store.database)
 
     @case("X01")
+    def test_a_committed_claim_reaches_a_page_whose_manifest_names_it(self):
+        """The service, not just the renderer, has to put claims on pages."""
+
+        service, store = self._service(self.local_database, "parity-demo", "local")
+        report = self._ingest(service, "parity-demo", MATERIAL, "key-page", "run-page")
+        self.assertEqual(report.status, "completed")
+
+        scope = Scope.of("local", "parity-demo")
+        pages = store.projections(scope)
+        self.assertEqual([page["slug"] for page in pages], ["project-knowledge"])
+        page = store.projection("project-knowledge", scope)
+        self.assertEqual(page["projection_status"], "current")
+        self.assertFalse(page["dirty"])
+
+        claim = store.iter_claims(scope)[0]
+        entries = page["manifest"]["entries"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["claim_version_id"], claim["claim_version_id"])
+        self.assertEqual(entries[0]["claim_id"], claim["claim_id"])
+        self.assertIn(claim["statement"], page["markdown"])
+        self.assertIn("当前低数据量场景", page["markdown"])
+        self.assertNotEqual(page["content_sha256"], "")
+
+    @case("X01")
+    def test_a_second_identical_ingest_does_not_rewrite_the_page(self):
+        service, store = self._service(self.local_database, "parity-demo", "local")
+        self._ingest(service, "parity-demo", MATERIAL, "key-1", "run-1")
+        scope = Scope.of("local", "parity-demo")
+        before = store.projection("project-knowledge", scope)["content_sha256"]
+        self._ingest(service, "parity-demo", MATERIAL, "key-2", "run-2")
+        after = store.projection("project-knowledge", scope)
+        self.assertEqual(after["content_sha256"], before)
+        self.assertEqual(after["manifest"]["entries"][0]["claim_version_id"], store.iter_claims(scope)[0]["claim_version_id"])
+
+    @case("X01")
     def test_local_material_never_reaches_the_shared_database_or_a_module_cache(self):
         ClaimStore(self.shared_database, knowledge_space_id="shared")
         local_service, _ = self._service(self.local_database, "local-only", "local")

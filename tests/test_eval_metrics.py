@@ -281,6 +281,12 @@ class GoldSetTests(unittest.TestCase):
                     "a unit that forbids an adoption claim must say which qualifier keeps it unadopted",
                 )
 
+    def test_future_questions_are_counted_so_the_gap_is_not_half_hidden(self):
+        summary = metrics.split_counts(self.units, self.manifest)
+        self.assertEqual(summary["measured"]["future_questions"], 19)
+        self.assertIn("future_questions", summary["shortfalls"])
+        self.assertEqual(summary["measured"]["holdout_future_questions"], 8)
+
     def test_the_shortfall_against_the_spec_minimums_is_reported_not_hidden(self):
         summary = metrics.split_counts(self.units, self.manifest)
         self.assertFalse(summary["meets_minimums"])

@@ -279,10 +279,12 @@ def split_counts(units: Sequence[Mapping[str, Any]], manifest: Mapping[str, Any]
     negative = [unit for unit in units if unit.get("negative_example")]
     synthesis = [unit for unit in units if unit.get("synthesis_target")]
     groups = {str(unit.get("group_id", "")) for unit in units}
+    questions = [(unit, question) for unit in units for question in unit.get("future_questions", ())]
 
     measured = {
         "material_groups": len(groups),
         "must_keep": len(must_keep),
+        "future_questions": len(questions),
         "decision_constraint": len(decision_units),
         "negative": len(negative),
         "synthesis_target": len(synthesis),
@@ -292,6 +294,9 @@ def split_counts(units: Sequence[Mapping[str, Any]], manifest: Mapping[str, Any]
         ),
         "holdout_negative": sum(1 for unit in negative if unit.get("split") == "holdout"),
         "holdout_synthesis_target": sum(1 for unit in synthesis if unit.get("split") == "holdout"),
+        "holdout_future_questions": sum(
+            1 for unit, _question in questions if unit.get("split") == "holdout"
+        ),
     }
     shortfalls = {
         key: {"have": measured[key], "need": value}

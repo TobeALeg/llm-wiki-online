@@ -1,0 +1,118 @@
+def _slugify(label: str) -> str:
+    """A page address from a label. Deterministic, so a claim keeps its page."""
+
+    normalized = unicodedata.normalize("NFKC", str(label or "")).casefold()
+    pieces = []
+    for character in normalized:
+        if character.isascii() and character.isalnum():
+            pieces.append(character)
+        else:
+            pieces.append("-")
+    slug = re.sub(r"-+", "-", "".join(pieces)).strip("-")
+    if slug:
+        return slug[:80].strip("-")
+    # A label with no ASCII at all still needs a stable address, so it is addressed
+    # by its own digest rather than by an empty slug that would collide with every
+    # other non-ASCII label.
+    return "page-" + hashlib.sha256(str(label or "").encode("utf-8")).hexdigest()[:12]
+
+
+def claim_page_slugs(claim: Mapping[str, Any]) -> list[str]:
+    """Which pages a claim belongs on.
+
+    An explicit `page_slug` or `page_slugs` wins, because that is a routing
+    decision. Otherwise a topic the claim is linked to names the page, which is
+    what puts one shared topic onto one page across projects.
+    """
+
+    slugs: list[str] = []
+    single = claim.get("page_slug")
+    if single:
+        slugs.append(str(single))
+    for slug in claim.get("page_slugs") or ():
+        if slug:
+            slugs.append(str(slug))
+    for label in claim.get("topic_labels") or ():
+        slugs.append(_slugify(str(label)))
+    if not slugs:
+        # A claim with no route still has to be readable, so a project keeps one
+        # page that carries everything not assigned elsewhere.
+        slugs.append("project-knowledge")
+    ordered: list[str] = []
+    for slug in slugs:
+        if slug and slug not in ordered:
+            ordered.append(slug)
+    return ordered
+
+
+def projection_renderer(
+    *,
+    store: Any,
+    scope: Scope,
+    claims: Sequence[Mapping[str, Any]],
+    dirty_only: bool = False,
+) -> dict[str, Any]:
+    """Group committed claims into pages and render them.
+
+    Deterministic. There is no model in this path, so a page cannot acquire a
+    sentence no claim supports. A page a person edited is left alone and reported
+    as manual, because a rebuild may not overwrite an edit in silence.
+    """
+
+    try:  # pragma: no cover - the flat layout is the vendored skill copy
+        from .projection import RENDERER_VERSION, page_content_sha256, plan_rebuild, render_page
+    except ImportError:
+        from projection import (  # type: ignore[no-redef]
+            RENDERER_VERSION,
+            page_content_sha256,
+            plan_rebuild,
+            render_page,
+        )
+
+    existing = [row for row in (store.projection(item["slug"], scope) for item in store.projections(scope)) if row]
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for claim in claims:
+        for slug in claim_page_slugs(claim):
+            grouped.setdefault(slug, {"slug": slug, "title": slug, "claims": []})["claims"].append(claim)
+
+    plan = plan_rebuild(existing_pages=existing, claims=claims)
+    wanted = set(plan["rebuild"]) if dirty_only else set(grouped)
+
+    manual: list[str] = []
+    unchanged: list[str] = []
+    pages: list[dict[str, Any]] = []
+    for slug, group in sorted(grouped.items()):
+        if slug not in wanted:
+            unchanged.append(slug)
+            continue
+        recorded = next((row for row in existing if row["slug"] == slug), None)
+        if recorded and recorded.get("projection_status") == "manual":
+            manual.append(slug)
+            continue
+        rendered = render_page(
+            page_slug=slug,
+            title=group["title"],
+            claims=group["claims"],
+            generated_at=max(
+                (str(claim.get("committed_at") or "") for claim in group["claims"]),
+                default="",
+            ),
+        )
+        pages.append(
+            {
+                "slug": slug,
+                "title": group["title"],
+                "markdown": rendered["markdown"],
+                "manifest": rendered["manifest"],
+                "content_sha256": page_content_sha256(rendered["markdown"]),
+            }
+        )
+    return {
+        "pages": pages,
+        "unchanged": sorted(unchanged),
+        "manual": sorted(manual),
+        "renderer": RENDERER_VERSION,
+    }
+
+

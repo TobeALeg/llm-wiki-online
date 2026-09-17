@@ -179,7 +179,9 @@
       "test_claim_store_contract.ReviewActionTests.test_V03_one_ambiguous_identity_holds_only_its_own_item_back"
     ],
     "X01": [
+      "test_modes_and_adapters.ModeParityTests.test_a_committed_claim_reaches_a_page_whose_manifest_names_it",
       "test_modes_and_adapters.ModeParityTests.test_a_controlled_extraction_produces_the_same_change_set_in_both_modes",
+      "test_modes_and_adapters.ModeParityTests.test_a_second_identical_ingest_does_not_rewrite_the_page",
       "test_modes_and_adapters.ModeParityTests.test_local_material_never_reaches_the_shared_database_or_a_module_cache"
     ],
     "X02": [

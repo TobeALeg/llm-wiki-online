@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -97,6 +99,133 @@ def config_fingerprint(*, parser_name: str, parser_version: str, config_hash: st
         "prompt_versions": dict(sorted(prompt_versions.items())),
     }
     return "cfg_" + hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _slugify(label: str) -> str:
+    """A page address from a label. Deterministic, so a claim keeps its page."""
+
+    normalized = unicodedata.normalize("NFKC", str(label or "")).casefold()
+    pieces = []
+    for character in normalized:
+        if character.isascii() and character.isalnum():
+            pieces.append(character)
+        else:
+            pieces.append("-")
+    slug = re.sub(r"-+", "-", "".join(pieces)).strip("-")
+    if slug:
+        return slug[:80].strip("-")
+    # A label with no ASCII at all still needs a stable address, so it is addressed
+    # by its own digest rather than by an empty slug that would collide with every
+    # other non-ASCII label.
+    return "page-" + hashlib.sha256(str(label or "").encode("utf-8")).hexdigest()[:12]
+
+
+def claim_page_slugs(claim: Mapping[str, Any]) -> list[str]:
+    """Which pages a claim belongs on.
+
+    An explicit `page_slug` or `page_slugs` wins, because that is a routing
+    decision. Otherwise a topic the claim is linked to names the page, which is
+    what puts one shared topic onto one page across projects.
+    """
+
+    slugs: list[str] = []
+    single = claim.get("page_slug")
+    if single:
+        slugs.append(str(single))
+    for slug in claim.get("page_slugs") or ():
+        if slug:
+            slugs.append(str(slug))
+    for label in claim.get("topic_labels") or ():
+        slugs.append(_slugify(str(label)))
+    if not slugs:
+        # A claim with no route still has to be readable, so a project keeps one
+        # page that carries everything not assigned elsewhere.
+        slugs.append("project-knowledge")
+        return slugs
+    ordered: list[str] = []
+    for slug in slugs:
+        if slug and slug not in ordered:
+            ordered.append(slug)
+    return ordered
+
+
+def projection_renderer(
+    *,
+    store: Any,
+    scope: Scope,
+    claims: Sequence[Mapping[str, Any]],
+    dirty_only: bool = False,
+) -> dict[str, Any]:
+    """Group committed claims into pages and render them.
+
+    Deterministic. There is no model in this path, so a page cannot acquire a
+    sentence no claim supports. A page a person edited is left alone and reported
+    as manual, because a rebuild may not overwrite an edit in silence.
+    """
+
+    try:  # pragma: no cover - the flat layout is the vendored skill copy
+        from .projection import RENDERER_VERSION, page_content_sha256, plan_rebuild, render_page
+    except ImportError:
+        from projection import (  # type: ignore[no-redef]
+            RENDERER_VERSION,
+            page_content_sha256,
+            plan_rebuild,
+            render_page,
+        )
+
+    existing = [row for row in (store.projection(item["slug"], scope) for item in store.projections(scope)) if row]
+    existing_slugs = {row["slug"] for row in existing}
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for claim in claims:
+        for slug in claim_page_slugs(claim):
+            title = scope.project_id if slug == "project-knowledge" else slug
+            grouped.setdefault(slug, {"slug": slug, "title": title, "claims": []})["claims"].append(claim)
+
+    plan = plan_rebuild(existing_pages=existing, claims=claims)
+    if dirty_only:
+        # A page that has never been written is always built. An existing page is
+        # only rebuilt when the plan says one of its claim versions moved, so an
+        # unrelated commit does not rewrite the whole wiki.
+        wanted = {slug for slug in grouped if slug not in existing_slugs} | set(plan["rebuild"])
+    else:
+        wanted = set(grouped)
+
+    manual: list[str] = []
+    unchanged: list[str] = []
+    pages: list[dict[str, Any]] = []
+    for slug, group in sorted(grouped.items()):
+        if slug not in wanted:
+            unchanged.append(slug)
+            continue
+        recorded = next((row for row in existing if row["slug"] == slug), None)
+        if recorded and recorded.get("projection_status") == "manual":
+            manual.append(slug)
+            continue
+        rendered = render_page(
+            page_slug=slug,
+            title=group["title"],
+            claims=group["claims"],
+            generated_at=max(
+                (str(claim.get("committed_at") or "") for claim in group["claims"]),
+                default="",
+            ),
+        )
+        pages.append(
+            {
+                "slug": slug,
+                "title": group["title"],
+                "markdown": rendered["markdown"],
+                "manifest": rendered["manifest"],
+                "content_sha256": page_content_sha256(rendered["markdown"]),
+            }
+        )
+    return {
+        "pages": pages,
+        "unchanged": sorted(unchanged),
+        "manual": sorted(manual),
+        "renderer": RENDERER_VERSION,
+    }
 
 
 class KnowledgeService:
@@ -441,23 +570,26 @@ class KnowledgeService:
         projection, not a lost decision.
         """
 
-        if self.renderer is None:
-            return {"rebuilt": [], "unchanged": [], "failed": [], "skipped": [], "renderer": "none"}
         scope = self.scope(project_id)
-        claims = self.store.iter_claims(scope)
-        plan = self.renderer(store=self.store, scope=scope, claims=claims, dirty_only=dirty_only)
+        renderer = self.renderer or projection_renderer
+        plan = renderer(
+            store=self.store,
+            scope=scope,
+            claims=self.store.iter_claims(scope, include_history=True),
+            dirty_only=dirty_only,
+        )
         rebuilt: list[str] = []
         failed: list[dict[str, Any]] = []
         for entry in plan.get("pages", []):
             try:
-                rendered = self.renderer(store=self.store, scope=scope, claims=entry["claims"], page_slug=entry["slug"], title=entry["title"], render_only=True)
                 self.store.upsert_projection(
                     scope=scope,
                     slug=entry["slug"],
                     title=entry["title"],
-                    markdown=rendered["markdown"],
-                    manifest=rendered["manifest"],
-                    content_sha256=rendered["content_sha256"],
+                    markdown=entry["markdown"],
+                    manifest=entry["manifest"],
+                    content_sha256=entry["content_sha256"],
+                    renderer_version=plan["renderer"],
                 )
                 rebuilt.append(entry["slug"])
             except Exception as error:  # a failed projection must not roll back knowledge
@@ -467,7 +599,7 @@ class KnowledgeService:
             "unchanged": list(plan.get("unchanged", [])),
             "failed": failed,
             "skipped": list(plan.get("manual", [])),
-            "renderer": "deterministic",
+            "renderer": plan.get("renderer", "deterministic"),
         }
 
 
