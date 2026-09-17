@@ -2,7 +2,7 @@
 
 ## 变更前基线（commit `ba0d4bd`）
 
-命令：`python -m unittest discover -s tests`
+命令：`python -m unittest discover -s tests`，在冻结的提交上连续运行三次以排除顺序依赖。
 
 | 项 | 值 |
 |---|---|
@@ -27,15 +27,18 @@
 
 | 项 | 值 |
 |---|---|
-| 用例数 | 306 |
-| 通过 | 306 |
+| 用例数 | 343 |
+| 通过 | 343 |
 | 失败 | 0 |
 | 跳过 | 0 |
 
 `python -m unittest tests.test_acceptance_case_map`：56 项用例契约全部被真实测试声明，
 无未知 ID。报告由测试自己写成 `evals/knowledge_v2/case_map.json`。
 
-`python scripts/sync_skill_distribution.py --check`：全部生成副本与 canonical 字节一致。
+`python scripts/sync_skill_distribution.py --check`：全部 26 个生成副本与 canonical 字节一致。
+
+独立的对抗复核在编辑过程中看到过 E06 与适配层用例间歇失败。在冻结提交上连跑三次都是全绿，
+所以那是编辑中间态，不是顺序依赖或竞争。
 
 ## 未执行的部分
 

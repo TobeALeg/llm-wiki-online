@@ -227,6 +227,42 @@ class EvaluateTests(unittest.TestCase):
             metrics.evaluate(critical_failures=[{"code": "something_new"}])
 
 
+class ReviewBurdenTests(unittest.TestCase):
+    """The review ratio is an observation, and it must not become a quota."""
+
+    def test_the_ratio_uses_all_candidates_as_the_denominator(self):
+        burden = metrics.review_burden(candidates=40, review_pending=6, material_groups=4)
+        self.assertEqual(burden["ratio"], 0.15)
+        self.assertEqual(burden["display"], "0.1500")
+        self.assertTrue(burden["within_target"])
+
+    def test_above_the_target_is_reported_without_changing_any_verdict(self):
+        burden = metrics.review_burden(candidates=20, review_pending=8)
+        self.assertEqual(burden["ratio"], 0.4)
+        self.assertFalse(burden["within_target"])
+        self.assertIn("never a reason to suppress ambiguity", burden["note"])
+        # It is not a threshold, so it cannot block a release on its own.
+        self.assertNotIn("review_burden", metrics.THRESHOLDS_BY_ID)
+
+    def test_an_empty_batch_is_not_evaluated_rather_than_zero_percent(self):
+        burden = metrics.review_burden(candidates=0, review_pending=0)
+        self.assertIsNone(burden["ratio"])
+        self.assertEqual(burden["display"], "N/A")
+        self.assertIsNone(burden["within_target"])
+
+    def test_a_denominator_smaller_than_the_numerator_is_refused(self):
+        with self.assertRaises(ValueError):
+            metrics.review_burden(candidates=3, review_pending=4)
+        with self.assertRaises(ValueError):
+            metrics.review_burden(candidates=-1, review_pending=0)
+
+    def test_per_group_and_card_counts_are_reported_alongside(self):
+        burden = metrics.review_burden(candidates=40, review_pending=6, material_groups=3, review_cards=2)
+        self.assertEqual(burden["material_groups"], 3)
+        self.assertEqual(burden["per_group"], 2.0)
+        self.assertEqual(burden["review_cards"], 2)
+
+
 class GoldSetTests(unittest.TestCase):
     def setUp(self):
         self.manifest = json.loads(

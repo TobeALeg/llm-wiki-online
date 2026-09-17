@@ -1732,7 +1732,15 @@ class ClaimStore:
                 stamp,
             ),
         )
-        for position, evidence_id in enumerate(origin.get("evidence_refs", ())):
+        seen_evidence: list[str] = []
+        for evidence_id in origin.get("evidence_refs", ()):
+            if evidence_id in seen_evidence:
+                # One support group cites one address once. Repeating it is a slip
+                # rather than a stronger requirement, so it is folded here instead
+                # of colliding with the primary key.
+                continue
+            seen_evidence.append(evidence_id)
+            position = len(seen_evidence) - 1
             owner = db.execute(
                 "SELECT project_id FROM evidence_refs WHERE evidence_id = ?", (evidence_id,)
             ).fetchone()
@@ -2979,6 +2987,138 @@ class ClaimStore:
                 db.rollback()
                 raise
         return {"seen": False, "artifact_id": artifact_id, "first_run_id": run_id}
+
+    def evidence_lineage(self, evidence_id: str, scope: Scope) -> dict[str, Any]:
+        """Where one citation's text came from, and which content it carries.
+
+        Two citations of the same article, or of a page summarising one
+        conversation, are the same material seen twice. Comparing this is what
+        keeps a repost from reading as a second witness.
+        """
+
+        with self._db() as db:
+            row = db.execute(
+                """SELECT e.evidence_id, e.artifact_id, e.withdrawn_at AS evidence_withdrawn,
+                          a.normalized_sha256, a.revision_id, a.parse_quality,
+                          r.source_id, r.ordinal, r.withdrawn_at AS revision_withdrawn
+                   FROM evidence_refs e
+                   JOIN parsed_artifacts a ON a.artifact_id = e.artifact_id
+                   JOIN source_revisions r ON r.revision_id = a.revision_id
+                   WHERE e.evidence_id = ? AND e.project_id = ?""",
+                (evidence_id, scope.project_id),
+            ).fetchone()
+        if not row:
+            raise ClaimStoreError(f"Unknown evidence in project {scope.project_id}: {evidence_id}.")
+        return {
+            "evidence_id": row["evidence_id"],
+            "artifact_id": row["artifact_id"],
+            "content_fingerprint": row["normalized_sha256"],
+            "revision_id": row["revision_id"],
+            "source_id": row["source_id"],
+            "source_ordinal": int(row["ordinal"]),
+            "parse_quality": row["parse_quality"],
+            "available": row["evidence_withdrawn"] is None and row["revision_withdrawn"] is None,
+        }
+
+    def support_lineage(self, claim_version_id: str, scope: Scope) -> dict[str, Any]:
+        """The witness count behind one claim version, with reposts counted once.
+
+        Support groups are alternatives, so two groups normally mean two ways to
+        hold the claim. When both groups rest on the same content, they are one
+        witness seen twice, and this reports that rather than letting the count
+        stand as evidence of corroboration.
+        """
+
+        with self._db() as db:
+            rows = db.execute(
+                """SELECT r.support_group_id, r.requirement_kind, r.requirement_id, r.available
+                   FROM claim_support_requirements r
+                   JOIN claim_versions v ON v.claim_version_id = r.claim_version_id
+                   WHERE r.claim_version_id = ? AND v.project_id = ?
+                   ORDER BY r.support_group_id, r.position""",
+                (claim_version_id, scope.project_id),
+            ).fetchall()
+        if not rows:
+            raise ClaimStoreError(f"Unknown claim version in project {scope.project_id}: {claim_version_id}.")
+
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            groups.setdefault(row["support_group_id"], []).append(
+                {"kind": row["requirement_kind"], "id": row["requirement_id"], "available": bool(row["available"])}
+            )
+
+        described: list[dict[str, Any]] = []
+        for group_id, requirements in groups.items():
+            fingerprints: list[str] = []
+            unavailable: list[str] = []
+            for requirement in requirements:
+                if requirement["kind"] == "evidence":
+                    lineage = self.evidence_lineage(requirement["id"], scope)
+                    fingerprints.append(lineage["content_fingerprint"])
+                    if not lineage["available"]:
+                        unavailable.append(requirement["id"])
+                else:
+                    # A premise claim is its own witness, so it is keyed by its own
+                    # version rather than by any text fingerprint.
+                    fingerprints.append(f"premise:{requirement['id']}")
+                    if not requirement["available"]:
+                        unavailable.append(requirement["id"])
+            described.append(
+                {
+                    "support_group_id": group_id,
+                    "requirements": requirements,
+                    "content_fingerprints": fingerprints,
+                    "distinct_content": len(set(fingerprints)),
+                    "duplicated_content": len(fingerprints) - len(set(fingerprints)),
+                    "unavailable": unavailable,
+                    "intact": not unavailable and bool(fingerprints),
+                }
+            )
+
+        # Two groups are the same witness when their content sets are equal.
+        witness_keys = {tuple(sorted(group["content_fingerprints"])) for group in described}
+        return {
+            "claim_version_id": claim_version_id,
+            "groups": described,
+            "group_count": len(described),
+            "independent_witnesses": len(witness_keys),
+            "repost_groups": max(0, len(described) - len(witness_keys)),
+            "intact_groups": sum(1 for group in described if group["intact"]),
+            "grounding_status": (
+                "grounded"
+                if any(group["intact"] for group in described)
+                else ("needs_revalidation" if any(group["requirements"] for group in described) else "unsupported")
+            ),
+        }
+
+    def reposted_sources(self, scope: Scope) -> list[dict[str, Any]]:
+        """Sources in this project that carry content another source already carries.
+
+        Reported rather than acted on: a repost is legitimate material, and the
+        thing that must not happen is counting it as a second independent witness.
+        """
+
+        with self._db() as db:
+            rows = db.execute(
+                """SELECT a.normalized_sha256 AS fingerprint,
+                          GROUP_CONCAT(DISTINCT r.source_id) AS sources,
+                          COUNT(DISTINCT r.source_id) AS source_count
+                   FROM parsed_artifacts a
+                   JOIN source_revisions r ON r.revision_id = a.revision_id
+                   WHERE a.project_id = ?
+                   GROUP BY a.normalized_sha256
+                   HAVING source_count > 1
+                   ORDER BY fingerprint""",
+                (scope.project_id,),
+            ).fetchall()
+        return [
+            {
+                "content_fingerprint": row["fingerprint"],
+                "source_ids": sorted(str(row["sources"]).split(",")),
+                "source_count": int(row["source_count"]),
+            }
+            for row in rows
+        ]
 
     def dispositions(self, scope: Scope, *, run_id: str = "") -> list[dict[str, Any]]:
         """Every recorded disposition, with its reason codes, so a DROP is traceable."""

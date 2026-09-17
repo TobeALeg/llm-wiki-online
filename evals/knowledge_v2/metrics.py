@@ -253,6 +253,47 @@ def evaluate(
     return report
 
 
+REVIEW_RATIO_TARGET = 0.15
+"""The share of candidates that may end up waiting on a person.
+
+An observation, not a gate. The spec is explicit that this must not become a
+quota the pipeline satisfies by hiding ambiguity, adopting decisions on its own,
+or dropping material worth keeping, so it is reported beside the blocking metrics
+rather than among them.
+"""
+
+
+def review_burden(
+    *,
+    candidates: int,
+    review_pending: int,
+    material_groups: int = 0,
+    review_cards: int = 0,
+) -> dict[str, Any]:
+    """How much human attention a batch asked for, measured the way the spec asks."""
+
+    if candidates < 0 or review_pending < 0:
+        raise ValueError("Counts cannot be negative.")
+    if review_pending > candidates:
+        raise ValueError("More reviews than candidates means the denominator is wrong.")
+    ratio = None if candidates == 0 else review_pending / candidates
+    return {
+        "candidates": candidates,
+        "review_pending": review_pending,
+        "ratio": ratio,
+        "display": "N/A" if ratio is None else f"{ratio:.4f}",
+        "target": REVIEW_RATIO_TARGET,
+        "within_target": None if ratio is None else ratio <= REVIEW_RATIO_TARGET,
+        "material_groups": material_groups,
+        "per_group": None if not material_groups else review_pending / material_groups,
+        "review_cards": review_cards or review_pending,
+        "note": (
+            "Observation only. A ratio above the target is a reason to look at why, "
+            "never a reason to suppress ambiguity, auto-adopt, or drop material."
+        ),
+    }
+
+
 def load_gold(path: str | Path) -> list[dict[str, Any]]:
     """Read a gold set from JSONL. Each line carries its own label status."""
 

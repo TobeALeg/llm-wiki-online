@@ -122,26 +122,33 @@ OFFSET_UNIT = "unicode_code_point"
 
 PROJECT_ID_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
 SPACE_ID_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
-_DIGEST = r"[0-9a-f]{32}(?:[0-9a-f]{32})?"
-"""32 or 64 hex characters.
+STORE_ID_HEX = r"[0-9a-f]{32}"
+"""A store-assigned object id: a uuid4 hex, or a truncated digest.
 
-A store-assigned object gets a uuid4 hex, which is 32. A content-derived address
-gets a full SHA-256 digest, which is 64. Both are permanent once issued, so the
-pattern accepts both rather than forcing one of them to change width and
-invalidate every citation already written.
+One width per address space is the invariant. An object the store names gets a
+uuid4 hex, which is 32 characters. An address derived from content gets a full
+SHA-256 digest, which is 64. `tests/test_id_width_contract.py` asserts both halves
+against what the minting functions actually produce, so the two cannot drift.
 """
 
-CLAIM_ID_PATTERN = re.compile(rf"^clm_{_DIGEST}$")
-CLAIM_VERSION_PATTERN = re.compile(rf"^clv_{_DIGEST}$")
-ORIGIN_ID_PATTERN = re.compile(rf"^org_{_DIGEST}$")
-TOPIC_ID_PATTERN = re.compile(rf"^top_{_DIGEST}$")
-EVIDENCE_ID_PATTERN = re.compile(rf"^evd_{_DIGEST}$")
-ARTIFACT_ID_PATTERN = re.compile(rf"^art_{_DIGEST}$")
-REVISION_ID_PATTERN = re.compile(rf"^rev_{_DIGEST}$")
-SOURCE_ID_PATTERN = re.compile(rf"^src_{_DIGEST}$")
-SUPPORT_GROUP_PATTERN = re.compile(rf"^sgr_{_DIGEST}$")
-RELATION_ID_PATTERN = re.compile(rf"^rel_{_DIGEST}$")
-PAGE_ID_PATTERN = re.compile(rf"^pag_{_DIGEST}$")
+CONTENT_ID_HEX = r"[0-9a-f]{64}"
+"""A content-derived address: a whole SHA-256 digest.
+
+Evidence and artifacts are addressed by their content, so their id changes if and
+only if the content does. Truncating it would make a collision reachable.
+"""
+
+CLAIM_ID_PATTERN = re.compile(rf"^clm_{STORE_ID_HEX}$")
+CLAIM_VERSION_PATTERN = re.compile(rf"^clv_{STORE_ID_HEX}$")
+ORIGIN_ID_PATTERN = re.compile(rf"^org_{STORE_ID_HEX}$")
+TOPIC_ID_PATTERN = re.compile(rf"^top_{STORE_ID_HEX}$")
+EVIDENCE_ID_PATTERN = re.compile(rf"^evd_{CONTENT_ID_HEX}$")
+ARTIFACT_ID_PATTERN = re.compile(rf"^art_{CONTENT_ID_HEX}$")
+REVISION_ID_PATTERN = re.compile(rf"^rev_{STORE_ID_HEX}$")
+SOURCE_ID_PATTERN = re.compile(rf"^src_{STORE_ID_HEX}$")
+SUPPORT_GROUP_PATTERN = re.compile(rf"^sgr_{STORE_ID_HEX}$")
+RELATION_ID_PATTERN = re.compile(rf"^rel_{STORE_ID_HEX}$")
+PAGE_ID_PATTERN = re.compile(rf"^pag_{STORE_ID_HEX}$")
 
 
 class KnowledgeError(ValueError):

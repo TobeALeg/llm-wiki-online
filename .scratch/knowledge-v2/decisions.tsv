@@ -27,3 +27,11 @@ ts	phase	decision	why	evidence	result
 2026-09-17T15:08:00Z	audit	发现两个同名的 EvidenceError，Web 层捕获的是另一个类	证据错误会漏成 500，而不是带错误码的 409	knowledge_types 定义、evidence 再导出	同一类，except 全都能抓到
 2026-09-17T15:10:00Z	audit	发现 Web 的 v2 路由 pattern 只收 32 位十六进制	evidence id 是 64 位，该路由对真实 id 永远匹配不上，只对不存在的 id 匹配	webapp.py 的 _ID_DIGEST	同时接受两种宽度
 2026-09-17T15:12:00Z	verify	全量套件 306 个用例全绿，56/56 用例映射不变	完成定义的前两条可证伪断言	reports/test-baseline.md	306 通过 0 失败 0 跳过
+2026-09-17T16:00:00Z	audit	独立复核指出 id 宽度是容忍而不是修复，宽度的不变量没有被守住	截断让碰撞可触及，第二份宽度定义在 webapp 里，两种宽度并存使「地址是什么」没有答案	docs/adr/0004-one-width-per-address-space.md	一空间一宽度，两个常量唯一定义，宽度测试守住
+2026-09-17T16:05:00Z	audit	补上 §2.5 的来源血缘：转贴不算第二个独立见证	规格禁止用复制次数提升可信度，而血缘此前完全没有实现	claim_store.py::support_lineage 与 reposted_sources	同内容两组只算一个见证，测试覆盖
+2026-09-17T16:08:00Z	audit	补上 §8.4 的 REVIEW 负担指标，并明确它不是门槛	规格把它列为观察项，不是可以自动压队列的配额	metrics.review_burden	比例、每材料组待审、合组卡片数，均不参与放行判定
+2026-09-17T16:12:00Z	audit	补一份 URL 之外的 ADR 记录 id 宽度决定	这是外部可见的永久契约变更，只写在流水里不够	docs/adr/0004	已采纳
+2026-09-17T16:15:00Z	audit	在发布报告里逐条列出未实现的规格条款与设计偏离	复核指出 §4.5 修复上限与重试计数、§8.3 对照、§5.1 core/store 归属既没实现也没列出	reports/knowledge-v2/release-report.md 第 6 节	6.1 偏离、6.2 未实现、6.3 局限分别成表
+2026-09-17T16:20:00Z	verify	修正报告里对不上的模块行数，改为 wc -l 实测	复核指出 10 行里有 6 行与文件不符，其中 4 行偏高	reports/knowledge-v2/release-report.md 第 1 节	全部改为实测值
+2026-09-17T16:25:00Z	verify	流水时间戳是事后补的，不是当时写的，在此说明	写入脚本给每一行盖了同一个时间戳，随后追加的行时间也与提交时刻不符；流水的时间轴不可信	write_trail.py 的 stamp 常量	如实标注：时间戳仅供排序，真实顺序见提交历史
+2026-09-17T16:30:00Z	verify	冻结提交后连跑三次全量套件，用来判定复核提出的间歇失败	复核在编辑期间的多轮运行里看到 E06 与适配层用例间歇失败，需要判定是真 flake 还是编辑中间态	python -m unittest discover -s tests 连续三次	三次都是 323 通过 0 失败，判定为编辑中间态，非 flake

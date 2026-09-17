@@ -10,16 +10,19 @@
 
 | 模块 | 行数 | 作用 |
 |---|---:|---|
-| `knowledge_types.py` | 1010 | Claim/Origin/关系/支持组/Scope 的数据契约与状态合法性 |
-| `evidence.py` | 508 | 文本规范化、artifact 冻结、span 寻址与校验、原话恢复 |
-| `chunking.py` | 566 | 结构分块；code point 坐标；evidence/context spans；render recipe |
-| `claim_store.py` | 2515 | v2 SQL、版本、原子提交、支持组、关系、REVIEW、投影持久化 |
-| `knowledge_service.py` | 649 | 冻结→提取→提交→投影→检索的统一用例 |
-| `knowledge_pipeline.py` | 2296 | discovery/synthesis/grounding/value 编排，注入式模型角色 |
+| `knowledge_types.py` | 811 | Claim/Origin/关系/支持组/Scope 的数据契约与状态合法性 |
+| `evidence.py` | 519 | 文本规范化、artifact 冻结、span 寻址与校验、原话恢复 |
+| `chunking.py` | 701 | 结构分块；code point 坐标；evidence/context spans；render recipe |
+| `claim_store.py` | 3156 | v2 SQL、版本、原子提交、支持组、关系、血缘、REVIEW、投影持久化 |
+| `knowledge_service.py` | 743 | 冻结→提取→提交→投影→检索的统一用例 |
+| `knowledge_pipeline.py` | 2284 | discovery/synthesis/grounding/value 编排，注入式模型角色 |
 | `projection.py` | 694 | 确定性页面模板、manifest、dirty 判定、人工编辑检测 |
 | `retrieval.py` | 1264 | CJK 分词、Page/Claim 双检索、去重、Why Chain、source fallback |
 | `migrate_v2.py` | 1788 | v1→v2 迁移、legacy 映射、备份/恢复/回退计划 |
 | `wiki_prompts.py` | 345 | 五个角色的契约、指令与版本号 |
+| `model_roles.py` | 104 | 按角色解析模型；按供应商上报记录 usage，缺报记 unknown |
+
+行数由 `wc -l` 实测。
 
 接入：`shared_service.py` 增加 v2 读路径与 `ingest`；`remote_mcp.py` 增加 5 个 v2 工具；
 `webapp.py` 增加 5 条 v2 只读路由；`skills/lw/scripts/wiki.py` 增加 9 个 `knowledge-*`
@@ -116,14 +119,44 @@
 
 ## 6. 已知局限
 
-- 页码：一个没有路由到任何 topic 的 claim 落在 `project-knowledge` 页。这保证它可读，但页面
-  分组规则目前只有"显式 page_slug"与"topic 标签"两条，没有按主题聚类。
-- `retrieval.py` 的嵌入通道是可替换的可选件，未配置时 `degraded` 为 true 并给出原因。当前
-  只有词面检索路径经过实测。
-- 迁移只处理 v1 的 sources 与 pages；v1 的 audits 与 versions 作为历史存进
-  `legacy_generated_page` 的 structure，不作为可引用证据。
-- `evals/knowledge_v2/gold.jsonl` 现有 25 条构造边界组；真实材料组尚未建立。
+以下条目是实施中确认未做或与规格原设计不同的地方，逐条列出而不是留给读者去发现。
+
+### 6.1 与规格原设计的偏离
+
+| 规格位置 | 原设计 | 实际实现 | 理由 |
+|---|---|---|---|
+| §5.1 `core.py` | v2 校验 Claim、scope、来源、关系、ChangeSet | `core.py` 与基线逐字节相同，v2 校验在 `knowledge_types.py` | 规格同时禁止把 `run_routed` 改成表面返回 pages 内部写 Claim 的函数；v1 的页面链路保持原样，v2 契约放在新模块 |
+| §5.1 `store.py` | 委托 v2 提交与读取 | `store.py` 与基线逐字节相同，委托由 `knowledge_service.py` 与 `shared_service.py` 承担 | 同上；两套写入语义共用一个 v1 模块会互相渗透 |
+| §5.1 `wiki_pipeline.py` | 增加 v2 prepare/extract/validate | v2 编排在 `knowledge_pipeline.py` | `wiki_pipeline.py` 的 `run_routed` 是 v1 页面合并，规格明确要求不要改它 |
+| §5.2 `schema_migrations` | 迁移版本、基线、校验和、恢复清单 | `claim_store.py` 写入 `schema_migrations` 版本 2 与 schema 校验和；`migrate_v2.py` 的进度记在 `migration_runs` | v2 建表是同一次 `initialize()`，没有编号迁移步骤；旧库补列走 `_add_missing_columns`，未编号 |
+| §8.4 REVIEW 比例与成本 | 每材料组 token、重试与费用统计 | `metrics.review_burden` 提供比例、每材料组待审与合组卡片数；成本按阶段记录在 `_stage`，没有汇总报告 | 成本需要真实模型运行才有数，未执行前汇总只会是空表 |
+
+### 6.2 未实现的规格条款
+
+| 规格位置 | 要求 | 状态 |
+|---|---|---|
+| §4.5 | 自动修复上限每阶段一次；传输重试与语义修复分别计数 | 未实现。批次失败会记入 `run_items` 并把 run 停在非 completed，但没有重试计数，也没有每阶段修复上限 |
+| §8.3 | v1/v2 同口径覆盖率与复用率提升 10 个百分点 | 未实现，需要真实模型跑 v1 与 v2 |
+| §8.4 | 每保留 Claim 的 token、重试与费用 | 阶段级已记录（模型、prompt 版本、重试次数、上报 token 或 unknown），未按 Claim 汇总 |
+
+### 6.3 设计与实现的局限
+
+- 页面分组规则只有两条：显式 `page_slug` 与 topic 标签。没有路由到任何 topic 的 claim 落在
+  `project-knowledge` 页，保证可读，但没有按主题聚类。已存在页面的 claim 归属从它的 manifest
+  读回，所以重命名或重建不会把 claim 丢到别的页面。
+- `retrieval.py` 的嵌入通道是可替换的可选件，未配置时 `degraded` 为 true 并给出原因。当前只有
+  词面检索路径经过实测。
+- 迁移只处理 v1 的 sources 与 pages；v1 的 audits 与 versions 存进 `legacy_generated_page`
+  的 structure，不作为可引用证据。
+- `evals/knowledge_v2/gold.jsonl` 现有 25 条构造边界组，全部标注
+  `label_status: constructed_unconfirmed`；真实材料组尚未建立，缺口由 `--check-gold` 打印。
+- K01–K11 与 X01 用受控 fake 与受控提取器验证语义，不衡量提取质量；只有未执行的 holdout 会。
 - 浏览器写权限边界未扩大：审核动作经 MCP/CLI，Web 只读。
+- 页面投影写进数据库（`page_projections.markdown`）。本地模式下把投影导出到
+  `.llm-wiki/pages/` 的 Markdown 文件没有接线：手改检测的接口与测试就绪，但没有把文件同步到
+  磁盘的调用点。
+- `.scratch/knowledge-v2/` 里的补丁脚本是本次实施的工作产物。整文件提交加脚本拼接，意味着单次
+  改动不能逐行回溯。
 
 ## 7. 回退
 
