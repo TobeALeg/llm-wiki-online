@@ -36,6 +36,18 @@ def candidate(statement, conditions=(), kind="constraint"):
     )
 
 
+def cited(statement):
+    """A candidate that cites something, for the checks that need a citation."""
+
+    return ClaimCandidate(
+        statement=statement,
+        state=ClaimState(
+            knowledge_kind="fact", derivation="explicit", epistemic_status="asserted"
+        ),
+        evidence_refs=("evd_" + "a" * 64,),
+    )
+
+
 class QuestionFormTests(unittest.TestCase):
     def test_an_a_not_a_question_is_not_a_negation(self):
         for text in (
@@ -180,6 +192,41 @@ class AttributeKindTests(unittest.TestCase):
         kept, dropped = pipeline._declared_attributes({"knowledge_kind": "process", "attributes": {}})
         self.assertEqual({}, kept)
         self.assertEqual([], dropped)
+
+
+class DenialScopeTests(unittest.TestCase):
+    """Proximity cannot tell a denial from an unrelated negative clause.
+
+    Observed on real material: a statement about a contract clause under legal review
+    was refused against the sentence that begins with it and continues into an
+    unrelated negative clause. Containment settles it; proximity does not.
+    """
+
+    def test_a_sentence_containing_the_statement_is_not_a_denial(self):
+        for statement, material in (
+            ("合同的自动续期条款目前仍在法务审阅中。", "合同的自动续期条款目前仍在法务审阅中，尚未签署。"),
+            ("讨论就到这里。", "没有人说采用，也没有人说不采用，讨论就到这里。"),
+        ):
+            with self.subTest(statement=statement):
+                self.assertEqual("", pipeline._denial(cited(statement), material))
+
+    def test_a_sentence_stating_the_opposite_is_still_a_denial(self):
+        for statement, material in (
+            ("缓存层使用 Redis。", "缓存层不使用 Redis，改用 memcached。"),
+            ("项目引入 Postgres。", "我们暂不引入 Postgres。"),
+        ):
+            with self.subTest(statement=statement):
+                self.assertNotEqual("", pipeline._denial(cited(statement), material))
+
+    def test_a_lowercased_term_is_found_in_capitalised_material(self):
+        """Terms are lowercased at extraction and product names keep their capitals."""
+
+        self.assertTrue(pipeline._negation_near("缓存层不使用 Redis。", "redis"))
+        self.assertFalse(pipeline._negation_near("缓存层使用 Redis。", "redis"))
+
+    def test_the_a_not_a_replacement_keeps_the_text_around_it(self):
+        self.assertEqual("会会", pipeline.ANOT_A_RE.sub(pipeline._NOT_A_NOT, "会不会"))
+        self.assertEqual("有有", pipeline.ANOT_A_RE.sub(pipeline._NOT_A_NOT, "有没有"))
 
 
 if __name__ == "__main__":

@@ -2490,37 +2490,60 @@ def _missing_qualifiers(candidate: ClaimCandidate, material: str) -> list[str]:
 def _negation_near(text: str, term: str, window: int = NEGATION_WINDOW) -> bool:
     """Whether a negation marker sits close enough to the term to negate it.
 
-    An A-not-A question form is neutralised first, because 会不会打架 asks whether
-    something will conflict while the bare 不 would report that the material denies
-    a conflict. A real negation of the same verb keeps its 不, since 不会 has a
-    different character on each side of it.
+    Two things are handled before the proximity test. An A-not-A question form is
+    neutralised, because 会不会 asks whether something will happen while
+    the bare 不 would report that the material denies it; a real negation of the same
+    verb keeps its marker, since the characters on each side differ.
+
+    The term is located case-insensitively, because terms are lowercased when they
+    are extracted and a product name keeps its capitals in the material. Searching
+    case-sensitively found nothing for a name like Redis and silently reported no
+    negation, which let a sentence that denies the statement pass as support.
     """
 
+    lowered = text.lower()
+    needle = term.lower()
     start = 0
     while True:
-        index = text.find(term, start)
+        index = lowered.find(needle, start)
         if index < 0:
             return False
         left = max(0, index - window)
-        right = min(len(text), index + len(term) + window)
-        if NEGATION_RE.search(ANOT_A_RE.sub(r"", text[left:right])):
+        right = min(len(text), index + len(needle) + window)
+        window_text = ANOT_A_RE.sub(_NOT_A_NOT, text[left:right])
+        if NEGATION_RE.search(window_text):
             return True
-        start = index + len(term)
+        start = index + len(needle)
+
+
+# A one-character backreference to itself, spelled without a literal backslash so the
+# replacement survives every editing tool that touches this file.
+_NOT_A_NOT = chr(92) + "1" + chr(92) + "1"
 
 
 def _denial(candidate: ClaimCandidate, material: str) -> str:
     """One sentence from the material that denies the candidate, if there is one.
 
-    A chunk that merely discusses the topic is not support, and a chunk that denies the
-    conclusion is not support either. A term the candidate itself hedges is skipped, so a
-    statement that carries its own negation is not read as its own contradiction.
+    A chunk that merely discusses the topic is not support, and a chunk that denies
+    the conclusion is not support either. A term the candidate itself hedges is
+    skipped, so a statement that carries its own negation is not read as its own
+    contradiction.
+
+    A sentence that contains the statement is not denying it, however many negations
+    it carries about something else. Observed three times on real material: a
+    statement about a contract clause under legal review was refused against the
+    sentence that begins with it and continues into an unrelated negative clause.
+    Proximity cannot tell those apart. Containment can.
     """
 
+    stated = candidate.statement.strip().rstrip("。.!！？").strip()
     for term in _key_terms(candidate.statement):
         if _negation_near(candidate.statement, term):
             continue
         for sentence in re.split(r"(?<=[.!?。！？\n])\s*", material):
             if not _contains(sentence, term):
+                continue
+            if stated and stated in sentence:
                 continue
             if _negation_near(sentence, term):
                 return sentence.strip()
