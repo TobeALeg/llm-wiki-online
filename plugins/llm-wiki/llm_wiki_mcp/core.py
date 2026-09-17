@@ -162,6 +162,98 @@ def normalize_existing_pages(pages: Iterable[Any]) -> list[dict[str, Any]]:
     return result
 
 
+def snapshot_chars(pages: Iterable[Any]) -> int:
+    """The size a direct submit would spend carrying this snapshot.
+
+    Measured on the normalized pages, which is what the request actually contains, so the
+    size trigger compares a real cost against a real budget rather than page-body length.
+    """
+
+    return _json_size(normalize_existing_pages(pages))
+
+
+def plan_catalog_slices(
+    entries: list[dict[str, Any]],
+    *,
+    budget: int | None = None,
+) -> list[list[dict[str, Any]]]:
+    """Group catalog entries into requests that each fit the catalog budget.
+
+    The budget is resolved per call rather than bound as a default, so a caller or a test
+    that lowers `MAX_CATALOG_CHARS` actually changes the slicing.
+    """
+
+    budget = MAX_CATALOG_CHARS if budget is None else budget
+    if not entries:
+        return []
+    slices: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    used = 0
+    for entry in entries:
+        size = _json_size(entry)
+        if size > budget:
+            raise CoreError(
+                f"Catalog entry {entry['slug']!r} alone exceeds the {budget} character budget."
+            )
+        if current and used + size > budget:
+            slices.append(current)
+            current, used = [], 0
+        current.append(entry)
+        used += size
+    if current:
+        slices.append(current)
+    return slices
+
+
+def normalize_catalog(entries: Iterable[Any]) -> list[dict[str, Any]]:
+    """The identity-only view of existing pages that the routing phase reads.
+
+    There is deliberately no entry-count or total-size cap here. A catalog larger than one
+    request is split by `plan_catalog_slices`, so the project may hold more pages than a
+    single merge could carry without any page leaving the routing decision.
+    """
+
+    if isinstance(entries, (str, bytes)) or not isinstance(entries, Iterable):
+        raise CoreError("catalog must be a list of page identity objects.")
+    result = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise CoreError("Each catalog entry must be an object.")
+        slug = _clean_string(entry.get("slug"), "page slug", max_chars=80)
+        if not SLUG_PATTERN.fullmatch(slug):
+            raise CoreError(f"Unsafe or invalid page slug: {slug!r}")
+        aliases = entry.get("aliases", [])
+        if isinstance(aliases, str):
+            aliases = [aliases]
+        if not isinstance(aliases, list):
+            raise CoreError(f"Catalog entry {slug} aliases must be a list.")
+        result.append({
+            "slug": slug,
+            "title": _clean_string(entry.get("title"), "page title", max_chars=240),
+            "type": _clean_string(entry.get("type"), "page type", max_chars=40),
+            "summary": _clean_string(entry.get("summary"), "page summary", max_chars=4_000),
+            "aliases": sorted({_clean_string(alias, "alias", max_chars=120) for alias in aliases if str(alias).strip()}),
+        })
+    if len({entry["slug"] for entry in result}) != len(result):
+        raise CoreError("catalog slugs must be unique.")
+    return result
+
+
+def validate_routed_pages(pages: list[dict[str, Any]], catalog_slugs: set[str], selected_slugs: set[str]) -> None:
+    """A routed submit may only touch the pages it selected, plus brand new ones.
+
+    The rest of the catalog was withheld from the model, so a page outside the selection
+    cannot have been written against its current text.
+    """
+
+    withheld = catalog_slugs - selected_slugs
+    touched = sorted({page["slug"] for page in pages if page["slug"] in withheld})
+    if touched:
+        raise CoreError(
+            "A routed update may not change pages it did not select: " + ", ".join(touched)
+        )
+
+
 def validate_page(page: Any, allowed_sources: set[str]) -> dict[str, Any]:
     if not isinstance(page, dict):
         raise CoreError("Every model page must be an object.")
@@ -259,6 +351,52 @@ class WikiCore:
         if _json_size(update) > MAX_OUTPUT_CHARS:
             raise CoreError(f"Update package exceeds the {MAX_OUTPUT_CHARS} character limit.")
         return update
+
+    def select_pages(
+        self,
+        materials: Iterable[Any],
+        catalog_entries: Iterable[Any],
+        purpose: str,
+    ) -> dict[str, Any]:
+        """Ask which existing pages these materials affect.
+
+        A catalog too large for one request is split into slices rather than truncated, so
+        no page is ever silently left out of the routing decision. Every returned slug is
+        checked against the slice it came from, which is the handle the model actually saw.
+        """
+
+        normalized_materials = normalize_materials(materials)
+        normalized_catalog = normalize_catalog(catalog_entries)
+        normalized_purpose = _clean_string(purpose, "purpose", max_chars=8_000)
+        if not normalized_purpose:
+            raise CoreError("purpose cannot be empty.")
+        selected: list[str] = []
+        notes: list[str] = []
+        for slice_entries in plan_catalog_slices(normalized_catalog):
+            known = {entry["slug"] for entry in slice_entries}
+            payload = {
+                "phase": "route",
+                "materials": normalized_materials,
+                "page_catalog": slice_entries,
+            }
+            result = self._model(payload, normalized_purpose, slice_entries)
+            if not isinstance(result, dict):
+                raise CoreError("Model output must be a JSON object.")
+            raw_slugs = result.get("slugs", [])
+            if not isinstance(raw_slugs, list):
+                raise CoreError("Model output field 'slugs' must be a list.")
+            for raw in raw_slugs:
+                slug = _clean_string(raw, "page slug", max_chars=80)
+                if slug not in known:
+                    raise CoreError(f"Routing selected a page outside the catalog slice: {slug!r}")
+                if slug not in selected:
+                    selected.append(slug)
+            note = _clean_string(result.get("note", ""), "note", max_chars=2_000)
+            if note:
+                notes.append(note)
+        if len(selected) > MAX_EXISTING_PAGES:
+            raise CoreError(f"Routing selected more than {MAX_EXISTING_PAGES} pages.")
+        return {"slugs": selected, "note": " ".join(notes)}
 
 
 def validate_update_package(update: Any, allowed_sources: set[str]) -> dict[str, Any]:
