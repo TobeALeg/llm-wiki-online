@@ -84,8 +84,8 @@ class SharedWikiService:
             material_list,
             purpose,
         )
-        if routed["package"] is not None:
-            return routed["package"]
+        if routed is not None:
+            return routed
         # Routing selected nothing, which may simply mean the evidence describes pages that
         # do not exist yet. A full submit can decide that; committing an empty package would
         # turn a routing miss into a silent no-op.

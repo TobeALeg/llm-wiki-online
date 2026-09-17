@@ -25,3 +25,5 @@ ts	phase	decision	why	evidence	result
 2026-09-17T01:10:00Z	verify	全量套件 172 通过；每个修复都做过变异验证	一个不可能失败的测试不是门禁	tests/ 全部	VERIFIED
 2026-09-17T01:20:00Z	verify	对抗性复现发现能力触发不可达：snapshot_chars 走 normalize_existing_pages，超过 500 页时先抛错	若测量与限制走同一条路径，submit_mode 永远收不到那个页数，第二个子句就是死代码；501 页实测 CoreError	修复前 501 页抛 CoreError；M7 回退会让 OversizedProjectTests 变红	已修，测量改用不设上限的 _normalized_page
 2026-09-17T01:22:00Z	verify	修复后重跑 22 项对抗性检查与 175 个测试	改一行也要重验	/tmp/verify_p2.py 全 PASS；tests/ 175 通过	VERIFIED
+2026-09-17T01:30:00Z	review	run_routed 的返回从四个键收敛为 package 或 None	service 只读 package，mode/selected/routing_note 三个键没有任何消费者，属推测性结构；principle-laziness-protocol 要求最小改动面	修复后 grep 无消费者；175 测试与 22 项对抗检查仍全绿	已简化
+2026-09-17T01:35:00Z	review	偏离自定计划：不实现 Python 侧候选召回评分函数，改为送完整目录（分批）由模型选	计划里写了「候选召回的评分函数」，但 D2 已定由模型从目录中选，且 §7.2 明确警告「不取前 N 页后当作全部」；客户端预过滤正是那条警告所指的失败模式	docs/weknora-llm-wiki-integration.md:261, :239；plan_catalog_slices 分批不丢弃	已按 D2 实现，计划此项作废
