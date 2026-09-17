@@ -597,6 +597,20 @@ def unit_text(root: Path, unit: dict[str, Any]) -> str:
     return text[unit["start"]:unit["end"]]
 
 
+def load_credentials() -> dict[str, Any]:
+    """Read the machine-level key file, if one exists, before any credential is used.
+
+    Optional by design. It exists so a key can be stored once instead of exported
+    in every shell, and a missing file is not an error.
+    """
+
+    try:
+        import model_roles
+    except ImportError:  # the vendored core is absent; nothing to read
+        return {"present": False, "path": ""}
+    return model_roles.load_env_file()
+
+
 def _configured_model(role: Any) -> str:
     """The model for one stage, resolved by the same rules the server uses."""
 
@@ -1537,6 +1551,9 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Before anything reads a credential, so the stored key and an exported one
+    # behave the same way for every subcommand.
+    load_credentials()
     args = parser().parse_args(argv)
     root = find_root(args.root)
     try:

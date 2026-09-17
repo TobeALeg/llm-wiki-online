@@ -2,6 +2,27 @@
 
 状态：本次实施随代码交付，未在真实生产上执行过切换。
 
+## 0. 先填模型凭据
+
+填一次，评测与 `/lw` 都读它。
+
+```bash
+mkdir -p ~/.llm-wiki
+cp docs/knowledge-v2/env.example ~/.llm-wiki/env
+$EDITOR ~/.llm-wiki/env     # 填 LLM_WIKI_API_KEY
+```
+
+Windows 上是 `%USERPROFILE%\.llm-wiki\env`。文件在仓库外面，所以不可能被 commit。
+
+确认它被读到了，这一步不会调用供应商、不产生费用：
+
+```bash
+python evals/knowledge_v2/run_eval.py --check-key
+```
+
+输出会给出文件路径、key 的长度与末四位、base url，以及每个角色实际会用哪个模型。
+key 缺失时退出码为 1。Shell 里导出的变量优先于文件里的值，所以临时换 key 不需要改文件。
+
 ## 1. 切换前必须确认
 
 | 检查项 | 命令 | 通过条件 |

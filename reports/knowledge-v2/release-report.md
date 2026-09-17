@@ -108,7 +108,7 @@
 
 | 签收项 | 状态 | 原因 |
 |---|---|---|
-| 三次真实模型 holdout 均达 blocking 门槛 | 未执行 | 无 API key |
+| 三次真实模型 holdout 均达 blocking 门槛 | 未执行 | 无 API key。填 `~/.llm-wiki/env` 后 `python evals/knowledge_v2/run_eval.py --check-key` 可确认凭据就绪 |
 | 所有零容忍错误在三次运行中为 0 | 未执行 | 同上 |
 | v1/v2 同口径价值与覆盖对照 | 未实现 | 需要真实模型跑 v1 与 v2 |
 | 真实材料 gold 达第 8.1 节最低规模并人工确认 | 未完成 | 机器不能给自己签收 |

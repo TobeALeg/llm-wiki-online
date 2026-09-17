@@ -65,6 +65,18 @@ PageProjection`。Page 由已提交的 claim 版本按固定模板渲染，manif
 - `evals/knowledge_v2/gold.jsonl` 目前只含构造边界组，全部标注
   `label_status: constructed_unconfirmed`。真实材料组的 gold 仍需人工确认。
 
+### 模型凭据放在哪里
+
+一次填好，评测与 `/lw` 都读同一个文件：
+
+```bash
+mkdir -p ~/.llm-wiki && cp docs/knowledge-v2/env.example ~/.llm-wiki/env
+```
+
+填 `~/.llm-wiki/env` 里的 `LLM_WIKI_API_KEY`。文件在仓库外面，不会被提交。同一个文件里可以
+按角色指定不同模型（`LLM_WIKI_DISCOVERY_MODEL` 等），留空即用 `LLM_WIKI_MODEL`。
+`python evals/knowledge_v2/run_eval.py --check-key` 确认它被读到，且不调用供应商。
+
 ### 未完成的发布门槛
 
 - 真实模型 holdout 三次运行未执行（缺少 API key），报告里标注 `not_executed`。

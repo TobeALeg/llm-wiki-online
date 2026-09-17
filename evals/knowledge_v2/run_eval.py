@@ -32,10 +32,39 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO_ROOT / "plugins" / "llm-wiki"))
 
 import metrics  # noqa: E402
+from llm_wiki_mcp.model_roles import credential_report, env_file_path, load_env_file  # noqa: E402
 
 
 def load_manifest() -> dict:
     return json.loads((HERE / "manifest.json").read_text(encoding="utf-8"))
+
+
+def check_key(loaded: dict) -> int:
+    """Say where the key was looked for and whether one was found."""
+
+    report = credential_report()
+    print(f"env file:   {report['env_file']}")
+    print(f"            {'found' if report['env_file_present'] else 'not found; create it or export the variables instead'}")
+    if loaded.get("present"):
+        if loaded["loaded"]:
+            print(f"loaded:     {', '.join(loaded['loaded'])}")
+        if loaded["already_set"]:
+            print(f"already in the environment, left alone: {', '.join(loaded['already_set'])}")
+        for item in loaded["ignored"]:
+            print(f"ignored line {item['line']}: {item['text']}")
+    print()
+    if not report["key_present"]:
+        print("No key is configured. The evaluation run will refuse to start.")
+        print("Put LLM_WIKI_API_KEY=... in that file, or export it in this shell.")
+        return 1
+    print(f"key:        {report['key_variable']}, {report['key_length']} characters, ends {report['key_tail']}")
+    print(f"base url:   {report['base_url']}")
+    print("models:")
+    for role, resolved in report["models"].items():
+        print(f"            {role:<10} {resolved['model']}  (from {resolved['source']})")
+    print()
+    print("This does not call the provider. Nothing has been spent yet.")
+    return 0
 
 
 def check_gold() -> int:
@@ -131,11 +160,18 @@ def run_once(*, split: str, materials: list[dict], run_id: str, destination: Pat
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--check-gold", action="store_true", help="report gold coverage against the manifest")
+    parser.add_argument("--check-key", action="store_true", help="report which credential was found and where")
     parser.add_argument("--split", default="holdout", choices=("dev", "holdout"))
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--materials", help="directory of frozen material files")
     parser.add_argument("--run-id", default="")
     arguments = parser.parse_args()
+
+    # Loaded before either check, so the same file serves the harness and `/lw`.
+    loaded = load_env_file()
+
+    if arguments.check_key:
+        return check_key(loaded)
 
     if arguments.check_gold:
         return check_gold()
@@ -154,9 +190,10 @@ def main() -> int:
     if not arguments.materials:
         print("Provide --materials <dir>. The evaluation corpus is not bundled with the repository.")
         return 2
-    if not (os.environ.get("LLM_WIKI_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")):
-        print("Refusing to run: no provider credential is configured.")
-        print("A mock result is not a substitute for the real-model requirement in the spec.")
+    if not credential_report()["key_present"]:
+        print(f"Refusing to run: no provider credential is configured. Looked in {env_file_path()}.")
+        print("Run with --check-key to see where it looks. A mock result is not a substitute")
+        print("for the real-model requirement in the spec.")
         return 2
 
     materials = _materials(Path(arguments.materials))
