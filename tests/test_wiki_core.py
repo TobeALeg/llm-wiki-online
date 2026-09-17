@@ -6,7 +6,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(REPO_ROOT / "plugins" / "llm-wiki"))
 
-from llm_wiki_mcp.core import CoreError, WikiCore  # noqa: E402
+from llm_wiki_mcp.core import (  # noqa: E402
+    MAX_EXISTING_CHARS,
+    MAX_MATERIAL_CHARS,
+    MAX_OUTPUT_CHARS,
+    MODEL_CONTEXT_TOKENS,
+    CoreError,
+    WikiCore,
+)
 
 
 class WikiCoreTests(unittest.TestCase):
@@ -93,6 +100,17 @@ class WikiCoreTests(unittest.TestCase):
             "Capture",
         )
         self.assertEqual(result["source_ids"], ["conversation:new"])
+
+
+class BudgetInvariantTests(unittest.TestCase):
+    def test_request_budgets_stay_under_the_model_context_window(self):
+        # One submit sends the materials, the whole project snapshot and reserves room for
+        # the model's response. Exceeding the window is not a clean rejection: the provider
+        # answer surfaces as a generic model failure, so the caps must sum under the window.
+        self.assertLessEqual(
+            MAX_MATERIAL_CHARS + MAX_EXISTING_CHARS + MAX_OUTPUT_CHARS,
+            MODEL_CONTEXT_TOKENS,
+        )
 
 
 if __name__ == "__main__":

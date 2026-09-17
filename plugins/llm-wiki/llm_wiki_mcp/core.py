@@ -8,11 +8,16 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
 
 CORE_SCHEMA_VERSION = 1
+# Context window of the configured model. One submit sends the whole project snapshot,
+# the materials and the model's own response in a single call, so the per-request budgets
+# below have to sum under this. A CJK character is roughly one token, so read the
+# character budgets as tokens.
+MODEL_CONTEXT_TOKENS = 1_000_000
 MAX_MATERIAL_CHARS = 180_000
 MAX_OUTPUT_CHARS = 240_000
 MAX_PAGE_BODY_CHARS = 100_000
 MAX_EXISTING_PAGES = 500
-MAX_EXISTING_CHARS = 240_000
+MAX_EXISTING_CHARS = 500_000
 ALLOWED_TYPES = {
     "concept",
     "decision",
