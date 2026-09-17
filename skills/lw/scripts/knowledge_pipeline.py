@@ -993,9 +993,10 @@ def validate_changes(
                         "subject_kind": "candidate",
                         "subject_id": candidate.statement[:120],
                         "subject_version": "",
-                        "question": (
-                            "这条候选遗漏了原文的限定，应该按原文补上限定后保留，还是按当前措辞发布？"
-                            "原文限定：" + qualifiers
+                        "question": review_question(
+                            RejectionCode.MISSING_QUALIFIER,
+                            candidate.statement,
+                            detail="原文限定：" + qualifiers,
                         ),
                         "trigger_code": RejectionCode.MISSING_QUALIFIER,
                         "candidates": {
@@ -1800,20 +1801,80 @@ def _review_trigger(candidate: ClaimCandidate) -> str:
     return codes[0] if codes else "insufficient_context"
 
 
+CJK = re.compile(r"[㐀-鿿]")
+"""A character in the CJK ranges. Used to pick the language of a review question."""
+
+REVIEW_QUESTIONS: dict[str, dict[str, str]] = {
+    "insufficient_context": {
+        "zh": "这条命题在本次读到的材料里找不到依据。补一个能承载它的来源，还是先不发布？",
+        "en": (
+            "This proposition is not carried by the material this run read. Cite a source "
+            "that carries it, or leave it unpublished?"
+        ),
+    },
+    "ambiguous_adoption": {
+        "zh": "这是谁提出的，有人采纳过吗？",
+        "en": "Who proposed this, and has anyone adopted it?",
+    },
+    "ambiguous_identity": {
+        "zh": "这指的是已有的哪个主题？",
+        "en": "Which existing subject does this refer to?",
+    },
+    "missing_qualifier": {
+        "zh": "这条候选遗漏了原文的限定。按原文补上限定后保留，按当前措辞发布，还是不要这条？",
+        "en": (
+            "This candidate dropped a qualifier the material carries. Restore the qualifier, "
+            "publish the current wording, or drop it?"
+        ),
+    },
+}
+"""One question per trigger, in both languages.
+
+The question is what a person acts on, so it has to be in the language they are
+working in. The material decides: a Chinese business plan produced English review
+questions, which is how this gap was found, and an English project would get the
+mirror image of it.
+"""
+
+REVIEW_QUESTION_DEFAULT: dict[str, str] = {
+    "zh": "这条命题应该保留吗？",
+    "en": "Should this proposition be kept?",
+}
+
+
+def statement_language(text: str) -> str:
+    """Which language a review question should be asked in.
+
+    Decided by the statement being reviewed, because that is the text the reader is
+    about to judge. A statement with any CJK and no long Latin run is treated as
+    Chinese; anything else is English.
+    """
+
+    sample = str(text or "")
+    cjk = len(CJK.findall(sample))
+    if not sample.strip():
+        return "en"
+    return "zh" if cjk * 4 >= len(sample.strip()) else "en"
+
+
+def review_question(trigger_code: str, statement: str, *, detail: str = "") -> str:
+    """The question to ask a person about one candidate."""
+
+    language = statement_language(statement)
+    templates = REVIEW_QUESTIONS.get(str(trigger_code), REVIEW_QUESTION_DEFAULT)
+    question = templates.get(language) or REVIEW_QUESTION_DEFAULT[language]
+    return f"{question} {detail}".strip() if detail else question
+
+
 def _review_question(candidate: ClaimCandidate) -> str:
     """One question a reviewer can answer, phrased from why the candidate is under review."""
 
     codes = set(candidate.reason_codes)
-    if "insufficient_context" in codes:
-        return (
-            "This proposition is not carried by the material this run read. Cite a source that carries it, "
-            "or leave it unpublished?"
-        )
-    if "ambiguous_adoption" in codes:
-        return "Who proposed this, and has anyone adopted it?"
-    if "ambiguous_identity" in codes:
-        return "Which existing subject does this refer to?"
-    return "Should this proposition be kept?"
+    for code in ("insufficient_context", "ambiguous_adoption", "ambiguous_identity"):
+        if code in codes:
+            return review_question(code, candidate.statement)
+    return review_question("", candidate.statement)
+
 
 
 def _resolve_config(config: Mapping[str, Any]) -> dict[str, Any]:
