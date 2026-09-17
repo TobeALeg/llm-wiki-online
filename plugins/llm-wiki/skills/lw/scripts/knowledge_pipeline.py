@@ -2360,6 +2360,14 @@ A material that qualifies its statement and a candidate that does not is how a s
 constraint becomes a universal rule, so the check is on the token, not on the sense.
 """
 
+ANOT_A_RE = re.compile(r"(.)[不没]\1")
+"""The Chinese A-not-A question form: 会不会, 能不能, 是不是, 有没有.
+
+The 不 in these is not a negation, it turns a statement into a question. Read
+as one it inverts an interrogative sentence, which is how material that merely asks
+whether two things conflict gets read as material that denies a conflict.
+"""
+
 NEGATION_RE = re.compile(
     r"(?:\b(?:not|never|no|none|cannot|can't|don't|doesn't|didn't|isn't|aren't|won't|"
     r"without|denies?|denied|refuses?|refused)\b|[不未无没非拒])",
@@ -2415,6 +2423,14 @@ def _missing_qualifiers(candidate: ClaimCandidate, material: str) -> list[str]:
 
 
 def _negation_near(text: str, term: str, window: int = NEGATION_WINDOW) -> bool:
+    """Whether a negation marker sits close enough to the term to negate it.
+
+    An A-not-A question form is neutralised first, because 会不会打架 asks whether
+    something will conflict while the bare 不 would report that the material denies
+    a conflict. A real negation of the same verb keeps its 不, since 不会 has a
+    different character on each side of it.
+    """
+
     start = 0
     while True:
         index = text.find(term, start)
@@ -2422,7 +2438,7 @@ def _negation_near(text: str, term: str, window: int = NEGATION_WINDOW) -> bool:
             return False
         left = max(0, index - window)
         right = min(len(text), index + len(term) + window)
-        if NEGATION_RE.search(text[left:right]):
+        if NEGATION_RE.search(ANOT_A_RE.sub(r"", text[left:right])):
             return True
         start = index + len(term)
 

@@ -184,6 +184,8 @@ def check(name: str, spec: dict, outcome: dict) -> list[str]:
         rejected = outcome["validated"]["rejected"]
         codes = sorted({str(item.get("code")) for item in rejected})
         problems.append(f"nothing was published; every candidate was rejected with {codes}")
+        for item in rejected[:3]:
+            problems.append(f"  rejection detail: {json.dumps(item, ensure_ascii=False)[:400]}")
 
     undispositioned = [c for c in candidates if not c.disposition]
     if undispositioned:
