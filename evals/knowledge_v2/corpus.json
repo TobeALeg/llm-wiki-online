@@ -1,0 +1,566 @@
+{
+  "notice": "材料组的定义与哈希。私有正文不进入仓库：这里只有路径、哈希与分组，评测时按 material_root 读回正文。",
+  "material_root_hint": "E:\\AI infra",
+  "scope_note": "真实组来自两个项目的文档与决策记录，构造组来自既有边界样本。材料正文不进仓库，只有路径、哈希与分组。",
+  "group_count": 35,
+  "real_group_count": 29,
+  "constructed_group_count": 6,
+  "splits": {
+    "dev": 25,
+    "holdout": 10
+  },
+  "groups": [
+    {
+      "group_id": "g01-work-distillation",
+      "split": "dev",
+      "title": "工作提炼规格与其验收标准",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/specs/work-distillation-v1.md",
+          "sha256": "46aa0345e8b54366554e6f999257c403f962b256590514db2b5a822cc358abe2",
+          "bytes": 52492,
+          "lines": 584
+        },
+        {
+          "path": "worket/docs/acceptance/work-distillation-v1.md",
+          "sha256": "381fb82c5175e9cfed1754d91149b4283964c86b242e5c9f9528a44c88dab28c",
+          "bytes": 7139,
+          "lines": 58
+        }
+      ]
+    },
+    {
+      "group_id": "g02-executor-adapters",
+      "split": "dev",
+      "title": "执行器适配层规格与其验收标准",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/specs/executor-adapters-v1.md",
+          "sha256": "a585f03362a80a5cf26336cb4b9ad5abe3a956a886121f5b45bcdd88fba60a3d",
+          "bytes": 9533,
+          "lines": 108
+        },
+        {
+          "path": "worket/docs/acceptance/executor-adapters-v1.md",
+          "sha256": "f2fee7792fde3a79bc9ce7f2c91d2c7cd340e1b9c7da6df6ca139192ce3f4fc1",
+          "bytes": 2459,
+          "lines": 27
+        }
+      ]
+    },
+    {
+      "group_id": "g03-architecture",
+      "split": "dev",
+      "title": "模块架构",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/architecture.md",
+          "sha256": "d527668b23aa6dc792db50787ae396e73b49b8d2c198d0a84e4a4aaa2072d0c5",
+          "bytes": 35581,
+          "lines": 330
+        }
+      ]
+    },
+    {
+      "group_id": "g04-product",
+      "split": "dev",
+      "title": "产品定义",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/product.md",
+          "sha256": "2c4ed91a4cd24806194415a3b49807ec585698b8b61c08e47875361bfeb67fd9",
+          "bytes": 25050,
+          "lines": 195
+        }
+      ]
+    },
+    {
+      "group_id": "g05-benefits",
+      "split": "holdout",
+      "title": "收益与洞察",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/bp/benefits-and-insights.md",
+          "sha256": "474c952a306ba1770df5b6d295a045af9215ffd44abbb3e7d5c0949972e1ef36",
+          "bytes": 29518,
+          "lines": 201
+        }
+      ]
+    },
+    {
+      "group_id": "g06-extraction-plan",
+      "split": "dev",
+      "title": "工作对象提取执行计划",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/work-object-extraction-execution-plan.md",
+          "sha256": "22d8bf760e708721b7db6a328e0e2adc72b06d0c63ab0be084a7563f5af69115",
+          "bytes": 17357,
+          "lines": 146
+        }
+      ]
+    },
+    {
+      "group_id": "g07-readme-agents",
+      "split": "dev",
+      "title": "项目说明与协作约定",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/README.md",
+          "sha256": "280c808e0d222c9ffc598b60693c7e2f902cbb2aa8d18217de021704d8822c0e",
+          "bytes": 10566,
+          "lines": 129
+        },
+        {
+          "path": "worket/AGENTS.md",
+          "sha256": "b48f212618a5f7750180a99190a823dd0e2f6868014707fad7fd989c5625c84d",
+          "bytes": 2044,
+          "lines": 25
+        }
+      ]
+    },
+    {
+      "group_id": "g08-context-notes",
+      "split": "dev",
+      "title": "领域词汇与工作笔记",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/CONTEXT.md",
+          "sha256": "16b78a09c355a055d693d14f34f8f6bcb584abe91a2bb46d29d89cafc50cccc9",
+          "bytes": 3474,
+          "lines": 57
+        },
+        {
+          "path": "worket/NOTES.md",
+          "sha256": "10aecec4f68f2021c3e5d2175fa296d977e548edabd3f7651ae5b4f16cd05d32",
+          "bytes": 6689,
+          "lines": 67
+        }
+      ]
+    },
+    {
+      "group_id": "g09-release-012",
+      "split": "holdout",
+      "title": "v0.1.2 发布说明与验收记录",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/releases/v0.1.2.md",
+          "sha256": "46ee807c5ab7d7c7f45ed0c08334ef66567bb0dd40b8312486de4403ca503481",
+          "bytes": 1223,
+          "lines": 19
+        },
+        {
+          "path": "worket/docs/releases/v0.1.2-verification.md",
+          "sha256": "d1945c1c2b0425c59a7a8520e9ca2a18fe1b478733792da0d8b5cce6e4b37857",
+          "bytes": 1872,
+          "lines": 26
+        }
+      ]
+    },
+    {
+      "group_id": "g10-deployment",
+      "split": "holdout",
+      "title": "VPS 运维与就绪清单",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/deployment/vps-operation.md",
+          "sha256": "36f25f9a488ca322fdbe7d740533d71db76709404d22444f23ece65ba9cd328f",
+          "bytes": 7280,
+          "lines": 68
+        },
+        {
+          "path": "worket/docs/deployment/vps-readiness.md",
+          "sha256": "8f1062299d910b7171da23aa31b509b0d90e8830046eb069baadc96f002a2130",
+          "bytes": 3711,
+          "lines": 40
+        }
+      ]
+    },
+    {
+      "group_id": "g11-interface-consistency",
+      "split": "dev",
+      "title": "界面一致性核查",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/qa/interface-consistency.md",
+          "sha256": "34c408ff670e489e1bfce592b9db2d5f12b58d40506cb2140131749955f2d670",
+          "bytes": 8258,
+          "lines": 60
+        }
+      ]
+    },
+    {
+      "group_id": "g12-tom-swe",
+      "split": "holdout",
+      "title": "ToM-SWE 可行性调研",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/research/tom-swe-feasibility.md",
+          "sha256": "eb6ff56db371239903fbbe7ba7a19e4e1b2e0d9227192620ed20091b0903ac9b",
+          "bytes": 7538,
+          "lines": 56
+        }
+      ]
+    },
+    {
+      "group_id": "g13-task-definition-index",
+      "split": "dev",
+      "title": "任务定义调研索引",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/research/task-definition/README.md",
+          "sha256": "a1134d96eb4422551ab0ed7df2a1454db9ec9d7e78ca32dc7d1653ff2441b538",
+          "bytes": 30572,
+          "lines": 257
+        }
+      ]
+    },
+    {
+      "group_id": "g14-human-problem",
+      "split": "dev",
+      "title": "人的问题表述",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/research/task-definition/human-problem-formulation.md",
+          "sha256": "2500517fe8bae779eaaa7cd902806ca66fd02e9d12dd66384f5e5e59fdb38b9b",
+          "bytes": 17514,
+          "lines": 108
+        }
+      ]
+    },
+    {
+      "group_id": "g15-llm-clarification",
+      "split": "holdout",
+      "title": "LLM 澄清证据",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/research/task-definition/llm-clarification-evidence.md",
+          "sha256": "9e91c8630bd8b799d75ac258becb11d827c1e1901fd71fddab81286fe4a7cc8e",
+          "bytes": 21327,
+          "lines": 123
+        }
+      ]
+    },
+    {
+      "group_id": "g16-memory-abstraction",
+      "split": "dev",
+      "title": "记忆与抽象",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/research/task-definition/memory-and-abstraction.md",
+          "sha256": "d61df7cab5b216b92d60bea4c2901550b88fa0ff788249e0cd65a1f174f87cdd",
+          "bytes": 18176,
+          "lines": 169
+        }
+      ]
+    },
+    {
+      "group_id": "g17-protocol-landscape",
+      "split": "holdout",
+      "title": "产品与协议图谱",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/research/task-definition/product-and-protocol-landscape.md",
+          "sha256": "5480f70114c33ea22fa79fd56f253b7bfc04a575454514dae3beece1bcd63b6f",
+          "bytes": 16711,
+          "lines": 94
+        }
+      ]
+    },
+    {
+      "group_id": "g18-repeated-work",
+      "split": "dev",
+      "title": "重复工作评测设计",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/research/task-definition/repeated-work-evaluation.md",
+          "sha256": "5851e079917f48db5627bc03233b7dcda322054c8372f27135326464c39bde83",
+          "bytes": 17466,
+          "lines": 121
+        }
+      ]
+    },
+    {
+      "group_id": "g19-acceptance-admin",
+      "split": "dev",
+      "title": "后台管理验收",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/acceptance/worket-backend-admin.md",
+          "sha256": "039e8a34d7ccdf3a5050d4528b7f8ccbfebd9f374bc75441eba5f2dd0b83c343",
+          "bytes": 4886,
+          "lines": 48
+        }
+      ]
+    },
+    {
+      "group_id": "g20-acceptance-improvement",
+      "split": "holdout",
+      "title": "改进项验收",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/acceptance/worket-improvement.md",
+          "sha256": "5f70cb4be51f1ec19a574d3770a5c722d286f45e08eb55f379c0160ba748130d",
+          "bytes": 5622,
+          "lines": 46
+        }
+      ]
+    },
+    {
+      "group_id": "g21-acceptance-recording",
+      "split": "dev",
+      "title": "记录上传验收",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/acceptance/worket-recording-upload.md",
+          "sha256": "22c36c28591be1eb5484f7819c19c96f97cff22c047e6a361f2f95fb510b028f",
+          "bytes": 3136,
+          "lines": 26
+        }
+      ]
+    },
+    {
+      "group_id": "g22-acceptance-docking",
+      "split": "dev",
+      "title": "桌宠吸附验收",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/docs/acceptance/worket-pet-docking.md",
+          "sha256": "78d724a0793e8048ed33651589377b8df52c2b88b74f89e7f5ae1d6000e90537",
+          "bytes": 1991,
+          "lines": 18
+        }
+      ]
+    },
+    {
+      "group_id": "g23-commit-history",
+      "split": "dev",
+      "title": "提交历史（按时间排列的真实决策与修正）",
+      "constructed": false,
+      "generated_root": "worket",
+      "files": [
+        {
+          "path": "<git log --reverse>",
+          "sha256": "673b3977a1583a113994ff32aae04f978d4c8aa3e5dc5970fe39a351859eaab4",
+          "bytes": 6698,
+          "lines": 109,
+          "generated": "git_log"
+        }
+      ]
+    },
+    {
+      "group_id": "g24-server-surface",
+      "split": "holdout",
+      "title": "服务端说明与运行面",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "worket/server/README.md",
+          "sha256": "040e8d8e89275819e8858f472a5ec96e0e916800aa49f44a8773f9f1d334e09a",
+          "bytes": 9614,
+          "lines": 104
+        }
+      ]
+    },
+    {
+      "group_id": "bp-v10",
+      "split": "dev",
+      "title": "商业计划 v1.0",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "0825/BPv1.0.md",
+          "sha256": "96ed444df355029452e77feb9e89c8279c05cfd58c717c3195f4e651d523307b",
+          "bytes": 8635,
+          "lines": 265
+        }
+      ]
+    },
+    {
+      "group_id": "bp-v11",
+      "split": "dev",
+      "title": "商业计划 v1.1",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "0825/BPv1.1.md",
+          "sha256": "bba1bae18834e42752aeda98b3e31ef607aa911e21f6db378c92bd131f17db59",
+          "bytes": 8904,
+          "lines": 262
+        }
+      ]
+    },
+    {
+      "group_id": "bp-v12-v13",
+      "split": "dev",
+      "title": "商业计划 v1.2 与 v1.3（两个文件同一内容）",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "0825/BPv1.2.md",
+          "sha256": "44fe5f8662978a7453bb097e63126b8bf616629e8707a4ea9998c394828276eb",
+          "bytes": 9458,
+          "lines": 307
+        },
+        {
+          "path": "0825/BPv1.3.md",
+          "sha256": "44fe5f8662978a7453bb097e63126b8bf616629e8707a4ea9998c394828276eb",
+          "bytes": 9458,
+          "lines": 307
+        }
+      ]
+    },
+    {
+      "group_id": "bp-v14",
+      "split": "dev",
+      "title": "商业计划 v1.4",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "0829/BPv1.4.md",
+          "sha256": "7ae912126c8ce872ae88630d666b88deca1b2e045b3f6fc499b476ae55d098f3",
+          "bytes": 10332,
+          "lines": 321
+        }
+      ]
+    },
+    {
+      "group_id": "bp-v14-partial",
+      "split": "dev",
+      "title": "商业计划 v1.4 的前缀导出",
+      "constructed": false,
+      "generated_root": "",
+      "files": [
+        {
+          "path": "0829/BPv1.4-4.md",
+          "sha256": "b664b73b1ada12d384e47d8b0976c940479fd635f50560a42974b58c791929d3",
+          "bytes": 3554,
+          "lines": 83
+        }
+      ]
+    },
+    {
+      "group_id": "group-c01-summary-window",
+      "split": "dev",
+      "title": "构造边界组 group-c01-summary-window",
+      "constructed": true,
+      "files": []
+    },
+    {
+      "group_id": "group-c02-modality",
+      "split": "dev",
+      "title": "构造边界组 group-c02-modality",
+      "constructed": true,
+      "files": []
+    },
+    {
+      "group_id": "group-c03-ai-suggestion",
+      "split": "dev",
+      "title": "构造边界组 group-c03-ai-suggestion",
+      "constructed": true,
+      "files": []
+    },
+    {
+      "group_id": "group-c04-qualifiers",
+      "split": "dev",
+      "title": "构造边界组 group-c04-qualifiers",
+      "constructed": true,
+      "files": []
+    },
+    {
+      "group_id": "group-c06-conflict",
+      "split": "holdout",
+      "title": "构造边界组 group-c06-conflict",
+      "constructed": true,
+      "files": []
+    },
+    {
+      "group_id": "group-c07-support-groups",
+      "split": "holdout",
+      "title": "构造边界组 group-c07-support-groups",
+      "constructed": true,
+      "files": []
+    }
+  ],
+  "skipped": [],
+  "relations": [
+    {
+      "kind": "identical",
+      "left": "0825/BPv1.2.md",
+      "right": "0825/BPv1.3.md"
+    },
+    {
+      "kind": "prefix_of",
+      "left": "0829/BPv1.4-4.md",
+      "right": "0829/BPv1.4.md",
+      "prefix_chars": 1867,
+      "right_chars": 5278
+    }
+  ],
+  "secret_paths_present": [
+    "old/ppt-master/.env.example",
+    "old/ppt-master/skills/ppt-master/.env.example",
+    "worket/.env.example",
+    "worket/src/ai-service/credentials.ts"
+  ],
+  "secret_paths_note": "材料目录里按路径规则排除的文件。分组从不引用它们，这里把它们列出来，使「没有读凭据」是一条可核对的事实，而不是一句声明。",
+  "relations_note": "同一份材料的重复或部分导出。血缘规则与内容指纹规则针对的就是这两种情形，所以评测需要知道它们。",
+  "reveals_material_text": false,
+  "screening": {
+    "files_scanned": 35,
+    "matches": 0,
+    "needs_review": [],
+    "placeholders_only": [],
+    "clean": true,
+    "note": "对语料里每个文件做的凭据形态扫描。path 规则抓不到写在正文中间的 key，这一步能。clean 为 true 才表示没有人需要先看一眼。"
+  }
+}

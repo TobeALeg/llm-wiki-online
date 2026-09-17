@@ -50,7 +50,7 @@ TEXT_NAMES = {"dockerfile", "makefile", "license", "readme"}
 SECRET_PATTERNS = (
     re.compile(r"(^|/)\.env(?:\.|$)", re.I),
     re.compile(r"(^|/)(?:id_rsa|id_ed25519)(?:\.|$)", re.I),
-    re.compile(r"(?:^|[._-])(?:secret|secrets|credential|credentials)(?:[._-]|$)", re.I),
+    re.compile(r"(?:^|[._/-])(?:secret|secrets|credential|credentials)(?:[._-]|$)", re.I),
     re.compile(r"\.(?:pem|key|p12|pfx|jks|keystore)$", re.I),
 )
 
