@@ -185,6 +185,11 @@
       "test_modes_and_adapters.ModeParityTests.test_local_material_never_reaches_the_shared_database_or_a_module_cache"
     ],
     "X02": [
+      "test_knowledge_adapters.KnowledgeAdapterTests.test_a_typed_result_keeps_every_field_and_is_labelled",
+      "test_knowledge_adapters.KnowledgeAdapterTests.test_an_unauthenticated_browser_call_cannot_read_knowledge",
+      "test_knowledge_adapters.KnowledgeAdapterTests.test_the_browser_carries_an_evidence_error_code_rather_than_an_empty_quote",
+      "test_knowledge_adapters.KnowledgeAdapterTests.test_the_browser_reports_claim_status_without_losing_an_axis",
+      "test_knowledge_adapters.KnowledgeAdapterTests.test_the_mcp_surface_exposes_the_v2_tools_when_wired",
       "test_modes_and_adapters.CleanSkillInstallTests.test_frozen_local_knowledge_is_readable_through_the_cli",
       "test_modes_and_adapters.CleanSkillInstallTests.test_the_vendored_core_loads_without_the_server_package"
     ],
@@ -194,6 +199,9 @@
       "test_knowledge_extraction.PromptInjectionTests.test_the_recorded_suspicion_does_not_change_any_status"
     ],
     "X04": [
+      "test_knowledge_adapters.KnowledgeAdapterTests.test_a_disabled_member_cannot_write_even_with_a_live_credential",
+      "test_knowledge_adapters.KnowledgeAdapterTests.test_the_adapter_layer_does_not_widen_write_access",
+      "test_knowledge_adapters.KnowledgeAdapterTests.test_the_legacy_page_route_still_reads_while_v2_writes_are_on",
       "test_modes_and_adapters.LegacyWriteBoundaryTests.test_a_prebuilt_pages_update_is_rejected_rather_than_committed",
       "test_modes_and_adapters.LegacyWriteBoundaryTests.test_claim_reads_stay_inside_the_requested_project",
       "test_modes_and_adapters.LegacyWriteBoundaryTests.test_material_only_submits_go_through_claims",

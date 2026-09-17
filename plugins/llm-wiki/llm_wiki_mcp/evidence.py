@@ -17,6 +17,11 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
+try:  # pragma: no cover - the flat layout is the vendored skill copy
+    from .knowledge_types import EVIDENCE_ERROR_CODES, EvidenceError
+except ImportError:  # pragma: no cover - the packaged layout
+    from knowledge_types import EVIDENCE_ERROR_CODES, EvidenceError  # type: ignore[no-redef]
+
 OFFSET_UNIT = "unicode_code_point"
 RENDER_RECIPE_VERSION = "1"
 
@@ -37,24 +42,13 @@ RECIPES = (
 _FOOTNOTE_PREFIXES = ("[^", "*", "†", "‡", "注", "Note:", "note:")
 
 
-class EvidenceError(ValueError):
-    """An unresolvable citation. The code says which kind of failure it was."""
+EvidenceError = EvidenceError
+"""Re-exported. The class lives in `knowledge_types`, which owns the codes.
 
-    CODES = (
-        "EVIDENCE_NOT_FOUND",
-        "SCOPE_MISMATCH",
-        "HASH_MISMATCH",
-        "SOURCE_WITHDRAWN",
-        "RAW_UNAVAILABLE",
-        "INVALID_SPAN",
-        "STRUCTURE_MISMATCH",
-    )
-
-    def __init__(self, message: str, *, code: str):
-        if code not in self.CODES:
-            raise ValueError(f"Unknown evidence error code: {code!r}")
-        super().__init__(message)
-        self.code = code
+Keeping one class means `except EvidenceError` catches every citation failure
+wherever it was raised, and `webapp` and `claim_store` cannot disagree about what
+an unresolvable citation is.
+"""
 
 
 def normalize_text(raw: str) -> str:

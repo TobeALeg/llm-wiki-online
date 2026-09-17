@@ -114,6 +114,8 @@ EVIDENCE_ERROR_CODES = (
     "HASH_MISMATCH",
     "SOURCE_WITHDRAWN",
     "RAW_UNAVAILABLE",
+    "INVALID_SPAN",
+    "STRUCTURE_MISMATCH",
 )
 
 OFFSET_UNIT = "unicode_code_point"
@@ -151,7 +153,11 @@ class KnowledgeError(ValueError):
 
 
 class EvidenceError(KnowledgeError):
-    """An evidence reference that cannot be resolved to exact source text."""
+    """An evidence reference that cannot be resolved to exact source text.
+
+    One class, defined here, re-exported by `evidence`. Two classes with this name
+    would mean a caller catching one of them misses half the failures.
+    """
 
     def __init__(self, message: str, *, code: str):
         if code not in EVIDENCE_ERROR_CODES:

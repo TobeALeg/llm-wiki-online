@@ -12,6 +12,8 @@ from mcp.types import ToolAnnotations
 
 from .service import episode_json, list_projects, read_page, run_wiki
 from .auth import AuthService, AuthStore
+from .claim_store import ClaimStore
+from .knowledge_service import projection_renderer
 from .remote_mcp import create_remote_mcp
 from .remote_service import RemoteWikiService
 from .shared_service import SharedWikiService
@@ -39,7 +41,15 @@ def database_path() -> Path:
 def create_company_mcp() -> FastMCP:
     database = database_path()
     auth = AuthService(AuthStore(database))
-    shared = SharedWikiService(SharedWikiStore(database))
+    # The v2 store shares the company database file, so a project's claims and its
+    # v1 pages live in one file and one backup covers both.
+    knowledge = ClaimStore(database, knowledge_space_id="shared")
+    shared = SharedWikiService(
+        SharedWikiStore(database),
+        knowledge=knowledge,
+        knowledge_space_id="shared",
+        projection_renderer=projection_renderer,
+    )
     local = RemoteWikiService()
     return create_remote_mcp(
         auth,
@@ -53,6 +63,11 @@ def create_company_mcp() -> FastMCP:
         submit_update=shared.submit,
         restore_page=shared.restore,
         organize_local=local.organize_local,
+        read_claim=shared.claim,
+        read_evidence=shared.evidence,
+        explain_claim=shared.explain,
+        read_reviews=shared.reviews,
+        review_action=shared.review_action,
         revoke_token=auth.revoke_mcp_token,
     )
 

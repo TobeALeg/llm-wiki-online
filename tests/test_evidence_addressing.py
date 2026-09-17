@@ -27,6 +27,10 @@ from llm_wiki_mcp.knowledge_types import Scope  # noqa: E402
 PROJECT_ID = "evidence-tests"
 PARSER_NAME = "structural"
 STDLIB_IMPORTS = {"__future__", "hashlib", "json", "dataclasses", "typing"}
+VENDORED_SIBLINGS = {"knowledge_types", "chunking", "evidence"}
+"""Modules vendored beside this one. They ship together, so importing one is not a
+dependency on anything a clean skill install lacks. `knowledge_types` is the root
+of that graph and imports no sibling, which the parity test asserts."""
 
 CHINESE = "中文"
 EMOJI = "\U0001F600"  # grinning face, one code point
@@ -526,7 +530,7 @@ class TamperedEvidenceTests(EvidenceFixture):
         self.assertEqual(raised.exception.code, "INVALID_SPAN")
         self.assertFalse(hasattr(raised.exception, "exact_text"))
 
-        self.assertEqual(imported_roots(Path(evidence.__file__)) - STDLIB_IMPORTS, set())
+        self.assertEqual(imported_roots(Path(evidence.__file__)) - STDLIB_IMPORTS - VENDORED_SIBLINGS, set())
         self.assertEqual(
             [
                 name

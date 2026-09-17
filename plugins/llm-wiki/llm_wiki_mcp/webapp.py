@@ -274,6 +274,10 @@ class WikiHTTPServer(ThreadingHTTPServer):
 
 PROTOCOL_VERSION = "wiki+knowledge/2"
 
+_ID_DIGEST = r"[0-9a-f]{32}(?:[0-9a-f]{32})?"
+"""32 or 64 hex characters. A store-assigned id is a uuid4 hex, a content-derived
+address such as an evidence id is a full digest, and both are permanent."""
+
 
 def knowledge_result(payload: dict[str, Any]) -> dict[str, Any]:
     """Tag a v2 payload without reshaping it.
@@ -425,7 +429,7 @@ class WikiWebApp:
             )
         if route == "/api/knowledge/reviews":
             return self.response(200, knowledge_result(self.shared.reviews(member["subject"], project_id)))
-        match = re.fullmatch(r"/api/knowledge/claims/(clm_[0-9a-f]{32})", route)
+        match = re.fullmatch(r"/api/knowledge/claims/(clm_" + _ID_DIGEST + r")", route)
         if match:
             version = urllib.parse.parse_qs(parsed.query).get("version", [""])[0]
             return self.response(
@@ -439,14 +443,14 @@ class WikiWebApp:
                     )
                 ),
             )
-        match = re.fullmatch(r"/api/knowledge/evidence/(evd_[0-9a-f]{32})", route)
+        match = re.fullmatch(r"/api/knowledge/evidence/(evd_" + _ID_DIGEST + r")", route)
         if match:
             try:
                 return self.response(200, knowledge_result(self.shared.evidence(member["subject"], match.group(1), project_id)))
             except EvidenceError as exc:
                 # A citation that cannot be recovered carries its code and no text.
                 return self.response(409, {"error": exc.code, "reason": str(exc), "protocol_version": PROTOCOL_VERSION})
-        match = re.fullmatch(r"/api/knowledge/why/(clm_[0-9a-f]{32})", route)
+        match = re.fullmatch(r"/api/knowledge/why/(clm_" + _ID_DIGEST + r")", route)
         if match:
             depth = urllib.parse.parse_qs(parsed.query).get("depth", ["3"])[0]
             return self.response(
