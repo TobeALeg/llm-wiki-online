@@ -26,6 +26,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 try:  # pragma: no cover - the flat layout is the vendored skill copy
     from . import chunking, evidence, wiki_prompts
     from .knowledge_types import (
+        EVIDENCE_ID_PATTERN,
         RUN_STATES,
         VALUE_GATE_DECISIONS,
         VALUE_GATE_REASON_CODES,
@@ -42,6 +43,7 @@ except ImportError:  # pragma: no cover - exercised by the flat layout only
     import evidence
     import wiki_prompts
     from knowledge_types import (
+        EVIDENCE_ID_PATTERN,
         RUN_STATES,
         VALUE_GATE_DECISIONS,
         VALUE_GATE_REASON_CODES,
@@ -116,6 +118,24 @@ ZERO_TOLERANCE_CODES = (
 """The refusals the spec names as zero tolerance, in severity order. A caller that gates a
 release counts these. `forged_identifier` and `invalid_candidate` are refusals as well, and
 they are listed separately only because this tuple is the named set."""
+
+REJECTION_ORDER = (
+    RejectionCode.INSTRUCTION_FROM_MATERIAL,
+    RejectionCode.FORGED_IDENTIFIER,
+    RejectionCode.FABRICATED_ADOPTION,
+    RejectionCode.FABRICATED_VERIFICATION,
+    RejectionCode.CROSS_PROJECT_REFERENCE,
+    RejectionCode.RECONSTRUCTED_REASON_AS_QUOTE,
+    RejectionCode.MISSING_QUALIFIER,
+    RejectionCode.CONTRADICTED_BY_EVIDENCE,
+    RejectionCode.INVALID_CANDIDATE,
+    RejectionCode.UNSUPPORTED_ASSERTION,
+)
+"""Which reason a rejection leads with when a candidate has several.
+
+Obeying an instruction outranks everything, then a model writing identity or a status it
+does not own, then the material-fidelity faults. `unsupported_assertion` is the catch-all
+and is reported last, so a reader sees the specific fault when there is one."""
 
 
 @dataclass(frozen=True)
@@ -192,7 +212,7 @@ SUSPICION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"(?:ignore|disregard|forget|override|bypass)\s+(?:all\s+|any\s+|the\s+|these\s+)?"
             r"(?:previous|prior|earlier|above|system|safety)\s+"
             r"(?:rules?|instructions?|prompts?|guidelines?)"
-            r"|(?:忽略|无视|忘记|绕过)(?:之前|以前|以上|所有|系统)?的?(?:规则|指令|提示|约束)",
+            r"|(?:忽略|无视|忘记|绕过)(?:之前|以前|以上|所有|系统|全部|一切)*的?(?:规则|指令|提示|约束)",
             re.IGNORECASE,
         ),
     ),
@@ -202,17 +222,18 @@ SUSPICION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"(?:set|mark|treat|consider|make|record)\s+(?:me|us|this|it|them)\b[^.\n]{0,40}"
             r"\b(?:approved|adopted|verified|authorized|authoritative|admin|canonical)\b"
             r"|(?:把我|将我|把它|将其|将该|把此)[^。\n]{0,12}"
-            r"(?:设为|标记为|视为|认定为|当作)(?:已批准|已通过|已采用|已核实|已确认|权威|管理员|决定)",
+            r"(?:设为|标记为|视为|认定为|当作)(?:已批准|已通过|已采用|已核实|已确认|权威|管理员|决定)"
+            r"(?:的)?(?:决定|状态|条目|身份|结论)?",
             re.IGNORECASE,
         ),
     ),
     (
         "sensitive_path",
         re.compile(
-            r"(?:read|cat|open|load|fetch|send|upload|exfiltrate|paste|dump|print|读取|读|打开|上传|发送)"
-            r"[^\n]{0,40}(?:/etc/|/root/|id_rsa|\.ssh/|\.env\b|passwd|shadow\b|secret|credential|"
-            r"api[_-]?key|private[_-]?key|C:\\)",
-            re.IGNORECASE,
+            r"^[^\n]*\b(?:read|cat|open|load|fetch|send|upload|exfiltrate|paste|dump|print|读取|读|打开|"
+            r"上传|发送)\b[^\n]*(?:/etc/|/root/|id_rsa|\.ssh/|\.env\b|passwd\b|shadow\b|secret|"
+            r"credential|api[_-]?key|private[_-]?key|C:\\)[^\n]*$",
+            re.IGNORECASE | re.MULTILINE,
         ),
     ),
     (
@@ -593,22 +614,24 @@ def artifact_extractor(
         records: dict[str, Any] = {}
         for chunk in chunks:
             chunk_id = str(getattr(chunk, "chunk_id", ""))
-            evidence_id = provided.get(chunk_id)
-            if not evidence_id:
+            registered = provided.get(chunk_id)
+            if not registered:
                 raise KnowledgeError(
                     f"Chunk {chunk_id!r} has no registered evidence id; the artifact extractor cites only "
                     "evidence the store already holds.",
                     code="INVALID_CONTEXT",
                 )
+            alias = registered
             record = _freeze_chunk(
                 scope=scope,
                 artifact=artifact,
                 chunk=chunk,
                 label=source_id,
-                evidence_id=evidence_id,
+                evidence_id=registered,
             )
-            records[record.evidence_id] = record
-            materials.append(_material(artifact, chunk, record.evidence_id, source_id))
+            records[alias] = record
+            records[registered] = record
+            materials.append(_material(artifact, chunk, alias, source_id))
 
         if not materials:
             return []
@@ -783,7 +806,7 @@ def validate_changes(
                 "the statement repeats an instruction found in the material, and material is data",
             ))
 
-        support = _support_names(snapshot, candidate.evidence_refs)
+        support = _support_names(snapshot, _resolved_ids(candidate, records))
         for name in candidate.state.required_support():
             if name in support:
                 continue
@@ -1126,7 +1149,9 @@ def _apply_synthesis(
 
     evidence_refs = tuple(premises) if "premises" in answer else tuple(candidate.evidence_refs)
     premise_ids = (
-        tuple(versions) if "premise_claim_version_ids" in answer else tuple(candidate.premise_claim_version_ids)
+        tuple(item for item in versions if item in known_versions)
+        if "premise_claim_version_ids" in answer
+        else tuple(candidate.premise_claim_version_ids)
     )
     inference_note = str(answer.get("inference_note") or candidate.inference_note or "").strip()
     assumptions = tuple(str(item) for item in answer.get("assumptions") or candidate.assumptions or ())
@@ -1357,7 +1382,9 @@ def _recover_texts(
     """Recover the exact text behind every citation, or name why it cannot be recovered.
 
     The spans come back out of the frozen artifact, so what the check reads is what the
-    source says. A citation that does not resolve is a refusal, not an empty string.
+    source says. A citation that does not resolve is a refusal, not an empty string. The
+    texts are keyed by the record's own evidence id, so a change set cites the address the
+    store registered even when the pipeline worked under an alias.
     """
 
     texts: dict[str, str] = {}
@@ -1381,7 +1408,10 @@ def _recover_texts(
                 raw_available=bool(snapshot.get("raw_available", True)),
             )
         except KnowledgeError as error:
-            problems.append((RejectionCode.UNSUPPORTED_ASSERTION, f"evidence {reference}: {error}"))
+            problems.append((
+                RejectionCode.UNSUPPORTED_ASSERTION,
+                f"evidence {reference}: {error}",
+            ))
             continue
         except evidence.EvidenceError as error:
             code = (
@@ -1389,23 +1419,27 @@ def _recover_texts(
                 if error.code == "SCOPE_MISMATCH"
                 else RejectionCode.UNSUPPORTED_ASSERTION
             )
-            problems.append((code, f"evidence {reference} cannot be recovered: {error.code}"))
+            problems.append((code, f"evidence {record.evidence_id} cannot be recovered: {error.code}"))
             continue
-        texts[reference] = recovered.exact_text
+        texts[str(record.evidence_id)] = recovered.exact_text
     return texts, problems
 
 
 def _ordered(found: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
-    """Rejections in a fixed order, so two runs report the same first cause.
+    """Rejections in the order `REJECTION_ORDER` states, so two runs report the same cause."""
 
-    `ZERO_TOLERANCE_CODES` order is the severity order: an invented adoption outranks a
-    dropped qualifier, and a caller reading `code` reads the worst thing found.
-    """
-
-    severity = {code: position for position, code in enumerate(ZERO_TOLERANCE_CODES)}
+    severity = {code: position for position, code in enumerate(REJECTION_ORDER)}
+    # Every refusal the spec names has a position in that table, and this is where the two
+    # lists are held together instead of drifting apart on the next edit.
+    missing = [code for code in ZERO_TOLERANCE_CODES if code not in severity]
+    if missing:
+        raise KnowledgeError(
+            f"REJECTION_ORDER carries no severity for {', '.join(missing)}.",
+            code="INVALID_REJECTION_ORDER",
+        )
     return sorted(
         found,
-        key=lambda item: (severity.get(item[0], len(ZERO_TOLERANCE_CODES)), item[1]),
+        key=lambda item: (severity.get(item[0], len(REJECTION_ORDER)), item[1]),
     )
 
 
@@ -1570,7 +1604,7 @@ def _review_item(candidate: ClaimCandidate, index: int, support: Sequence[str], 
         "subject_id": _mint("clm_", *seed),
         "subject_version": _mint("clv_", *seed),
         "question": _review_question(candidate),
-        "trigger_code": candidate.reason_codes[0] if candidate.reason_codes else "insufficient_context",
+        "trigger_code": _review_trigger(candidate),
         "action": "retain",
         "index": index,
         "batch_id": candidate.batch_id,
@@ -1587,6 +1621,19 @@ def _review_item(candidate: ClaimCandidate, index: int, support: Sequence[str], 
             "decision_state": candidate.state.decision_state,
         },
     }
+
+
+REVIEW_TRIGGERS = ("insufficient_context", "ambiguous_adoption", "ambiguous_identity")
+
+
+def _review_trigger(candidate: ClaimCandidate) -> str:
+    """The reason a reviewer opens this item, which is not the value gate's keep reason."""
+
+    codes = list(candidate.reason_codes)
+    for code in REVIEW_TRIGGERS:
+        if code in codes:
+            return code
+    return codes[0] if codes else "insufficient_context"
 
 
 def _review_question(candidate: ClaimCandidate) -> str:
@@ -1678,31 +1725,35 @@ def _freeze_chunk(
     `chunk.evidence()` is what the source contains. A renderer's re-emitted fence or
     header is not part of it, so a reconstructed scaffold can never be cited as source
     text, and a caller that already registered the id gets a record that agrees with it.
+
+    The citation keeps whichever address it was given, because the id the store
+    registered is the id the claim must cite.
     """
 
     spans = tuple(chunk.evidence())
-    refs = _structural_refs(artifact, chunk)
+    hashes = tuple(
+        evidence.span_hash(artifact.normalized_text, start, end) for start, end in spans
+    )
     if evidence_id:
         return evidence.EvidenceRecord(
             evidence_id=evidence_id,
             project_id=scope.project_id,
             artifact_id=artifact.artifact_id,
             spans=spans,
-            span_hashes=tuple(
-                evidence.span_hash(artifact.normalized_text, start, end) for start, end in spans
-            ),
+            span_hashes=hashes,
             heading_path=tuple(chunk.heading_path),
-            structural_context_refs=refs,
+            structural_context_refs=_structural_refs(artifact, chunk),
             label=label,
         )
-    return evidence.make_evidence(
+    minted = evidence.make_evidence(
         project_id=scope.project_id,
         artifact=artifact,
         spans=spans,
         heading_path=tuple(chunk.heading_path),
-        structural_context_refs=refs,
+        structural_context_refs=_structural_refs(artifact, chunk),
         label=label,
     )
+    return minted
 
 
 def _structural_refs(artifact: Any, chunk: Any) -> tuple[int, ...]:
@@ -1959,12 +2010,33 @@ def _split_batch(candidate_batch: Any) -> tuple[list[Any], list[str], list[str]]
 
 
 def _cited_texts(candidate: ClaimCandidate, materials: Sequence[Mapping[str, Any]]) -> list[str]:
-    refs = set(candidate.evidence_refs)
+    refs = {str(reference) for reference in candidate.evidence_refs}
     return [
         str(material.get("text", ""))
         for material in materials
         if str(material.get("evidence_id", "")) in refs
     ]
+
+
+def _resolved_ids(candidate: ClaimCandidate, records: Mapping[str, Any]) -> list[str]:
+    """Every name this candidate's citations are known by, the pipeline's and the store's.
+
+    A support record is keyed by the evidence the store registered, so a check that only
+    looked at the alias would miss it.
+    """
+
+    ids: set[str] = set()
+    for reference in candidate.evidence_refs:
+        ids.add(str(reference))
+        record = records.get(reference)
+        if record is None:
+            continue
+        if isinstance(record, Mapping):
+            ids.add(str(record.get("evidence_id") or ""))
+        else:
+            ids.add(str(getattr(record, "evidence_id", "") or ""))
+    ids.discard("")
+    return sorted(ids)
 
 
 def _support_names(snapshot: Mapping[str, Any], evidence_refs: Sequence[str]) -> set[str]:

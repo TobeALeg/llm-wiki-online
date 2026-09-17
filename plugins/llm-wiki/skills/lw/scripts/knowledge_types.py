@@ -120,17 +120,26 @@ OFFSET_UNIT = "unicode_code_point"
 
 PROJECT_ID_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
 SPACE_ID_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
-CLAIM_ID_PATTERN = re.compile(r"^clm_[0-9a-f]{32}$")
-CLAIM_VERSION_PATTERN = re.compile(r"^clv_[0-9a-f]{32}$")
-ORIGIN_ID_PATTERN = re.compile(r"^org_[0-9a-f]{32}$")
-TOPIC_ID_PATTERN = re.compile(r"^top_[0-9a-f]{32}$")
-EVIDENCE_ID_PATTERN = re.compile(r"^evd_[0-9a-f]{32}$")
-ARTIFACT_ID_PATTERN = re.compile(r"^art_[0-9a-f]{32}$")
-REVISION_ID_PATTERN = re.compile(r"^rev_[0-9a-f]{32}$")
-SOURCE_ID_PATTERN = re.compile(r"^src_[0-9a-f]{32}$")
-SUPPORT_GROUP_PATTERN = re.compile(r"^sgr_[0-9a-f]{32}$")
-RELATION_ID_PATTERN = re.compile(r"^rel_[0-9a-f]{32}$")
-PAGE_ID_PATTERN = re.compile(r"^pag_[0-9a-f]{32}$")
+_DIGEST = r"[0-9a-f]{32}(?:[0-9a-f]{32})?"
+"""32 or 64 hex characters.
+
+A store-assigned object gets a uuid4 hex, which is 32. A content-derived address
+gets a full SHA-256 digest, which is 64. Both are permanent once issued, so the
+pattern accepts both rather than forcing one of them to change width and
+invalidate every citation already written.
+"""
+
+CLAIM_ID_PATTERN = re.compile(rf"^clm_{_DIGEST}$")
+CLAIM_VERSION_PATTERN = re.compile(rf"^clv_{_DIGEST}$")
+ORIGIN_ID_PATTERN = re.compile(rf"^org_{_DIGEST}$")
+TOPIC_ID_PATTERN = re.compile(rf"^top_{_DIGEST}$")
+EVIDENCE_ID_PATTERN = re.compile(rf"^evd_{_DIGEST}$")
+ARTIFACT_ID_PATTERN = re.compile(rf"^art_{_DIGEST}$")
+REVISION_ID_PATTERN = re.compile(rf"^rev_{_DIGEST}$")
+SOURCE_ID_PATTERN = re.compile(rf"^src_{_DIGEST}$")
+SUPPORT_GROUP_PATTERN = re.compile(rf"^sgr_{_DIGEST}$")
+RELATION_ID_PATTERN = re.compile(rf"^rel_{_DIGEST}$")
+PAGE_ID_PATTERN = re.compile(rf"^pag_{_DIGEST}$")
 
 
 class KnowledgeError(ValueError):

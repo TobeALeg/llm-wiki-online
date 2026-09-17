@@ -61,6 +61,23 @@ def context_subject() -> str:
     return access.client_id
 
 
+PROTOCOL_VERSION = "wiki+knowledge/2"
+"""What the v2 tools answer under. A v1 client reads `page_count`; a v2 client
+reads `claim_count`. A field that changed meaning gets a new tool name instead,
+so nothing a v1 caller relies on silently changes type."""
+
+
+def typed(payload: dict[str, Any]) -> dict[str, Any]:
+    """Stamp a result with the protocol it was produced under.
+
+    An adapter that reshapes a result is how a claim's status or a citation's error
+    code goes missing between the store and the caller, so the payload is passed
+    through and only tagged.
+    """
+
+    return {**payload, "protocol_version": PROTOCOL_VERSION, "result_type": "knowledge"}
+
+
 def context_token() -> str:
     access = get_access_token()
     if access is None or not access.token:
@@ -81,6 +98,11 @@ def create_remote_mcp(
     submit_update: Callable[..., dict[str, Any]] | None = None,
     restore_page: Callable[..., dict[str, Any]] | None = None,
     organize_local: Callable[..., dict[str, Any]] | None = None,
+    read_claim: Callable[..., dict[str, Any]] | None = None,
+    read_evidence: Callable[..., dict[str, Any]] | None = None,
+    explain_claim: Callable[..., dict[str, Any]] | None = None,
+    read_reviews: Callable[..., dict[str, Any]] | None = None,
+    review_action: Callable[..., dict[str, Any]] | None = None,
     revoke_token: Callable[[str], None] | None = None,
 ) -> FastMCP:
     """Create the protected `/mcp` server and register its first read seam."""
@@ -188,6 +210,86 @@ def create_remote_mcp(
         def local_wiki_organize(materials: list[dict[str, Any]], existing_pages: list[dict[str, Any]], purpose: str, ctx: Context = None) -> dict[str, Any]:
             context_subject()
             return organize_local(materials, existing_pages, purpose)
+
+    if read_claim:
+        @server.tool(
+            name="company_wiki_claim",
+            title="Read one claim",
+            description=(
+                "Read one committed claim with its status axes, origins, support groups and relations. "
+                "Pass a version to read a historical statement."
+            ),
+        )
+        def company_wiki_claim(claim_id: str, version: int = 0, project_id: str = DEFAULT_PROJECT_ID, ctx: Context = None) -> dict[str, Any]:
+            return typed(read_claim(context_subject(), claim_id, version or None, project_id))
+
+    if read_evidence:
+        @server.tool(
+            name="company_wiki_evidence",
+            title="Recover a citation",
+            description=(
+                "Recover the exact source text behind a citation from its frozen parse snapshot. "
+                "A failure carries a code such as HASH_MISMATCH or SOURCE_WITHDRAWN and returns no text."
+            ),
+        )
+        def company_wiki_evidence(evidence_id: str, project_id: str = DEFAULT_PROJECT_ID, ctx: Context = None) -> dict[str, Any]:
+            return typed(read_evidence(context_subject(), evidence_id, project_id))
+
+    if explain_claim:
+        @server.tool(
+            name="company_wiki_why",
+            title="Explain why a claim is held",
+            description=(
+                "Return the recorded reasons and the system-derived explanations behind a claim, "
+                "kept in separate lists, bounded by max_depth. A bounded answer reports truncated=true."
+            ),
+        )
+        def company_wiki_why(claim_id: str, mode: str = "why", max_depth: int = 3, project_id: str = DEFAULT_PROJECT_ID, ctx: Context = None) -> dict[str, Any]:
+            return typed(explain_claim(context_subject(), claim_id, mode=mode, max_depth=max_depth, project_id=project_id))
+
+    if read_reviews:
+        @server.tool(
+            name="company_wiki_reviews",
+            title="List open reviews",
+            description="List the reviews waiting on a decision, each with its question, candidates, evidence and impact.",
+        )
+        def company_wiki_reviews(project_id: str = DEFAULT_PROJECT_ID, ctx: Context = None) -> dict[str, Any]:
+            return typed(read_reviews(context_subject(), project_id))
+
+    if review_action:
+        @server.tool(
+            name="company_wiki_review_action",
+            title="Decide a review",
+            description=(
+                "Apply one review action: retain, edit, reject, adopt_decision, confirm_supersession or confirm_identity. "
+                "retain keeps a claim without verifying it or adopting a proposal. "
+                "A stale expected_version is refused so an old decision cannot overwrite newer knowledge."
+            ),
+        )
+        def company_wiki_review_action(
+            review_id: str,
+            expected_version: str,
+            action: str,
+            idempotency_key: str,
+            note: str = "",
+            edited_statement: str = "",
+            topic_id: str = "",
+            project_id: str = DEFAULT_PROJECT_ID,
+            ctx: Context = None,
+        ) -> dict[str, Any]:
+            return typed(
+                review_action(
+                    context_subject(),
+                    review_id,
+                    expected_version,
+                    action,
+                    idempotency_key,
+                    project_id=project_id,
+                    note=note,
+                    edited_statement=edited_statement or None,
+                    topic_id=topic_id or None,
+                )
+            )
 
     if revoke_token:
         @server.tool(

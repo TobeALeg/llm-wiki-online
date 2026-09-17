@@ -20,6 +20,7 @@ from .auth import AuthError, AuthService
 from .model import ModelError
 from .oauth import OAuthError, OAuthService
 from .remote_readme import readme_bytes
+from .knowledge_types import EvidenceError
 from .remote_service import RemoteWikiService
 from .shared_service import SharedWikiService
 from .store import DEFAULT_PROJECT_ID, ConflictError, PageNotFoundError, StoreError
@@ -271,6 +272,20 @@ class WikiHTTPServer(ThreadingHTTPServer):
         super().__init__(address, handler)
 
 
+PROTOCOL_VERSION = "wiki+knowledge/2"
+
+
+def knowledge_result(payload: dict[str, Any]) -> dict[str, Any]:
+    """Tag a v2 payload without reshaping it.
+
+    A browser view that dropped an error code or a status axis would show a
+    citation that looks missing rather than one that failed a hash check, so the
+    store's answer is passed through and only labelled.
+    """
+
+    return {**payload, "protocol_version": PROTOCOL_VERSION}
+
+
 class WikiWebApp:
     def __init__(self, auth: AuthService, shared: SharedWikiService, local: RemoteWikiService | None = None, oauth: OAuthService | None = None):
         self.auth = auth
@@ -395,6 +410,56 @@ class WikiWebApp:
                 return self.response(200, self.shared.versions(member["subject"], match.group(1), project_id))
             except PageNotFoundError as exc:
                 raise NotFoundError(str(exc)) from exc
+        if route == "/api/knowledge/status":
+            return self.response(200, knowledge_result(self.shared.status(member["subject"], project_id)))
+        if route == "/api/knowledge/search":
+            return self.response(
+                200,
+                knowledge_result(
+                    self.shared.search(
+                        member["subject"],
+                        urllib.parse.parse_qs(parsed.query).get("q", [""])[0],
+                        project_id=project_id,
+                    )
+                ),
+            )
+        if route == "/api/knowledge/reviews":
+            return self.response(200, knowledge_result(self.shared.reviews(member["subject"], project_id)))
+        match = re.fullmatch(r"/api/knowledge/claims/(clm_[0-9a-f]{32})", route)
+        if match:
+            version = urllib.parse.parse_qs(parsed.query).get("version", [""])[0]
+            return self.response(
+                200,
+                knowledge_result(
+                    self.shared.claim(
+                        member["subject"],
+                        match.group(1),
+                        version=int(version) if version.isdigit() else None,
+                        project_id=project_id,
+                    )
+                ),
+            )
+        match = re.fullmatch(r"/api/knowledge/evidence/(evd_[0-9a-f]{32})", route)
+        if match:
+            try:
+                return self.response(200, knowledge_result(self.shared.evidence(member["subject"], match.group(1), project_id)))
+            except EvidenceError as exc:
+                # A citation that cannot be recovered carries its code and no text.
+                return self.response(409, {"error": exc.code, "reason": str(exc), "protocol_version": PROTOCOL_VERSION})
+        match = re.fullmatch(r"/api/knowledge/why/(clm_[0-9a-f]{32})", route)
+        if match:
+            depth = urllib.parse.parse_qs(parsed.query).get("depth", ["3"])[0]
+            return self.response(
+                200,
+                knowledge_result(
+                    self.shared.explain(
+                        member["subject"],
+                        match.group(1),
+                        max_depth=int(depth) if depth.isdigit() else 3,
+                        project_id=project_id,
+                    )
+                ),
+            )
         if route == "/api/me":
             return self.response(200, {"member": member})
         if route == "/api/mcp-credentials":

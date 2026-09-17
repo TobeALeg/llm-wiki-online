@@ -109,6 +109,20 @@ V1_AUDITS = (
     ("jetbao", 1, "update", "member-c", "Ops guide created.", 0, 1, "2026-09-07T09:00:00Z"),
 )
 
+V1_SINGLE_SCOPE_SCHEMA_SQL = """
+CREATE TABLE wiki_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+INSERT INTO wiki_meta VALUES ('current_version', '1');
+CREATE TABLE wiki_sources (source_id TEXT PRIMARY KEY, kind TEXT NOT NULL, label TEXT NOT NULL, content TEXT NOT NULL, content_sha256 TEXT NOT NULL, actor_subject TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE wiki_pages (slug TEXT PRIMARY KEY, title TEXT NOT NULL, type TEXT NOT NULL, status TEXT NOT NULL, tags_json TEXT NOT NULL, summary TEXT NOT NULL, body TEXT NOT NULL, source_ids_json TEXT NOT NULL, updated_at TEXT NOT NULL, version INTEGER NOT NULL);
+CREATE TABLE wiki_versions (id INTEGER PRIMARY KEY AUTOINCREMENT, version INTEGER NOT NULL, slug TEXT NOT NULL, title TEXT NOT NULL, type TEXT NOT NULL, status TEXT NOT NULL, tags_json TEXT NOT NULL, summary TEXT NOT NULL, body TEXT NOT NULL, source_ids_json TEXT NOT NULL, actor_subject TEXT NOT NULL, action TEXT NOT NULL, created_at TEXT NOT NULL, previous_version INTEGER);
+CREATE TABLE wiki_audits (id INTEGER PRIMARY KEY AUTOINCREMENT, version INTEGER NOT NULL, action TEXT NOT NULL, actor_subject TEXT NOT NULL, summary TEXT NOT NULL, source_ids_json TEXT NOT NULL, before_version INTEGER NOT NULL, after_version INTEGER NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE wiki_submissions (idempotency_key TEXT PRIMARY KEY, request_hash TEXT NOT NULL, intent_hash TEXT, result_json TEXT NOT NULL, created_at TEXT NOT NULL);
+INSERT INTO wiki_sources VALUES ('legacy:guide', 'file', 'guide.md', '# Guide\n\nUse the policy.\n', 'digest', 'member-a', '2026-09-16T00:00:00Z');
+INSERT INTO wiki_pages VALUES ('guide', 'Guide', 'guide', 'current', '[]', 'Legacy', 'Legacy body', '["legacy:guide"]', '2026-09-16T00:00:00Z', 1);
+INSERT INTO wiki_versions(id, version, slug, title, type, status, tags_json, summary, body, source_ids_json, actor_subject, action, created_at, previous_version) VALUES (1, 1, 'guide', 'Guide', 'guide', 'current', '[]', 'Legacy', 'Legacy body', '["legacy:guide"]', 'member-a', 'update', '2026-09-16T00:00:00Z', NULL);
+INSERT INTO wiki_audits VALUES (1, 1, 'update', 'member-a', 'Legacy update', '["legacy:guide"]', 0, 1, '2026-09-16T00:00:00Z');
+"""
+
 COUNTED_TABLES = (
     "sources",
     "source_revisions",
@@ -268,13 +282,20 @@ class MigrationTests(MigrationTestCase):
         self.assertEqual(scalar(self.v1, "SELECT COUNT(*) FROM wiki_pages"), plan["pages"]["total"])
         self.assertEqual(file_sha256(self.v1), before, "a dry run must not write the v1 database")
 
+        only_jetbao = migrate_v2.plan_migration(
+            v1_database=self.v1, knowledge_space_id=KNOWLEDGE_SPACE, project_id="jetbao"
+        )
+        self.assertEqual([item["project_id"] for item in only_jetbao["projects"]], ["jetbao"])
+        self.assertEqual(only_jetbao["sources"], {"total": 1, "with_raw_text": 1, "without_raw_text": 0})
+        self.assertEqual(only_jetbao["pages"], {"total": 1, "generated_only": 0})
+
         database, first = self.migrate_into("v2-g01.sqlite3")
         self.assertTrue(first["complete"])
         self.assertEqual(first["status"], "completed")
         self.assertEqual(first["claims_skipped_reason"], "extractor_not_provided")
         self.assertEqual(first["sources"]["mapped"], 3)
         self.assertEqual(first["pages"]["mapped"], 5)
-        self.assertEqual(first["claims"], {"total": 0, "extracted": 0})
+        self.assertEqual(first["claims"], {"total": 0, "extracted": 0, "replayed": 0})
         self.assertEqual(
             first["safety"], {"verified_claims": 0, "adopted_decisions": 0, "checked": 0}
         )
@@ -353,11 +374,89 @@ class MigrationTests(MigrationTestCase):
                 self.assertEqual(resumed[section], whole[section])
         self.assertEqual(table_counts(interrupted), table_counts(reference))
 
+    @case("G01")
+    def test_g01_an_old_single_scope_database_migrates_as_the_company_project(self):
+        legacy = self.root / "wiki-v1-single.sqlite3"
+        connection = sqlite3.connect(legacy)
+        try:
+            connection.executescript(V1_SINGLE_SCOPE_SCHEMA_SQL)
+            connection.commit()
+        finally:
+            connection.close()
+        before = file_sha256(legacy)
+
+        plan = migrate_v2.plan_migration(v1_database=legacy, knowledge_space_id=KNOWLEDGE_SPACE)
+        self.assertEqual([item["project_id"] for item in plan["projects"]], ["company"])
+        self.assertEqual(plan["sources"], {"total": 1, "with_raw_text": 1, "without_raw_text": 0})
+        self.assertEqual(plan["pages"], {"total": 1, "generated_only": 0})
+        self.assertEqual(
+            [(ref["legacy_id"], ref["source_id"], ref["has_raw_text"]) for ref in plan["legacy_refs"]],
+            [("guide", "legacy:guide", True)],
+        )
+
+        database = self.root / "v2-g01-single.sqlite3"
+        report = migrate_v2.migrate(
+            v1_database=legacy,
+            v2_database=database,
+            knowledge_space_id=KNOWLEDGE_SPACE,
+            actor_subject="migration-bot",
+            run_id="run-single",
+        )
+        self.assertTrue(report["complete"])
+        self.assertEqual(report["sources"]["mapped"], 1)
+        self.assertEqual(report["pages"]["mapped"], 1)
+        self.assertEqual(
+            migrate_v2.legacy_text(
+                v2_database=database,
+                knowledge_space_id=KNOWLEDGE_SPACE,
+                project_id="company",
+                legacy_kind="source",
+                legacy_id="legacy:guide",
+            )["stored_text"],
+            "# Guide\n\nUse the policy.\n",
+        )
+        self.assertEqual(
+            migrate_v2.resolve_legacy(database, "company", "source", "legacy:guide")["new_id"],
+            migrate_v2.legacy_source_id("company", "legacy:guide"),
+        )
+        self.assertEqual(file_sha256(legacy), before)
+
+    @case("G01")
+    def test_g01_losing_the_migration_bookkeeping_does_not_duplicate_a_committed_batch(self):
+        database, first = self.migrate_into("v2-g01-replay.sqlite3", extractor=chunk_extractor)
+        self.assertEqual(first["claims"], {"total": 3, "extracted": 3, "replayed": 0})
+        counts_before = table_counts(database)
+
+        # A crash between a committed batch and its mapping write leaves the map
+        # empty while the store already holds the answer under the same key.
+        connection = sqlite3.connect(database)
+        try:
+            connection.execute("DELETE FROM legacy_map")
+            connection.execute("DELETE FROM migration_runs")
+            connection.commit()
+        finally:
+            connection.close()
+
+        again = migrate_v2.migrate(
+            v1_database=self.v1,
+            v2_database=database,
+            knowledge_space_id=KNOWLEDGE_SPACE,
+            actor_subject="migration-bot",
+            run_id="run-1",
+            extractor=chunk_extractor,
+        )
+        self.assertTrue(again["complete"])
+        self.assertEqual(again["resume"], "fresh")
+        self.assertEqual(again["claims"], {"total": 3, "extracted": 3, "replayed": 3})
+        self.assertEqual(table_counts(database), counts_before)
+        self.assertEqual(len(migrate_v2.legacy_mapping(database, "company")["claim"]), 2)
+        self.assertEqual(len(migrate_v2.legacy_mapping(database, "jetbao")["claim"]), 1)
+
     @case("G02")
     def test_g02_raw_sources_are_re_extracted_and_generated_pages_carry_no_quotation(self):
         database, report = self.migrate_into("v2-g02.sqlite3", extractor=chunk_extractor)
         self.assertIsNone(report["claims_skipped_reason"])
-        self.assertEqual(report["claims"], {"total": 3, "extracted": 3})
+        self.assertEqual(report["claims"], {"total": 3, "extracted": 3, "replayed": 0})
         self.assertEqual(report["safety"], {"verified_claims": 0, "adopted_decisions": 0, "checked": 3})
 
         extracted = migrate_v2.legacy_text(
@@ -377,7 +476,10 @@ class MigrationTests(MigrationTestCase):
             migrate_v2.legacy_source_id("company", "conversation:release-policy"),
         )
         self.assertTrue(extracted["evidence_ids"])
-        self.assertEqual(extracted["exact_text"], RELEASE_TEXT)
+        # The quotation is the material's own text, recovered through a citation
+        # rather than read out of the artifact.
+        self.assertIn(extracted["exact_text"], extracted["stored_text"])
+        self.assertEqual(extracted["exact_text"].strip(), RELEASE_TEXT.strip())
 
         generated = migrate_v2.legacy_text(
             v2_database=database,
@@ -546,7 +648,8 @@ class MigrationTests(MigrationTestCase):
             database=fresh, knowledge_space_id=KNOWLEDGE_SPACE, project_id="company"
         )
         self.assertTrue(verified["readable"])
-        self.assertEqual(verified["counts"]["claims"], report["claims"]["total"])
+        company = [item for item in report["projects"] if item["project_id"] == "company"][0]
+        self.assertEqual(verified["counts"]["claims"], company["claims"])
         self.assertEqual(verified["counts"]["evidence_refs"], 2)
         self.assertEqual(verified["evidence_verified"], 2)
         self.assertEqual(verified["evidence_failed"], 0)
@@ -572,6 +675,14 @@ class MigrationTests(MigrationTestCase):
         rendered = json.dumps(plan, ensure_ascii=False)
         self.assertNotIn("lossless", rendered.lower())
         self.assertNotIn("无损", rendered)
+        # Readable is a verdict about the content, so a file that is not there is not readable.
+        self.assertFalse(
+            migrate_v2.verify_restore(
+                database=self.root / "no-such-database.sqlite3",
+                knowledge_space_id=KNOWLEDGE_SPACE,
+                project_id="company",
+            )["readable"]
+        )
 
 
 if __name__ == "__main__":

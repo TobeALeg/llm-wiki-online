@@ -1,0 +1,205 @@
+{
+  "covered_count": 56,
+  "map": {
+    "E01": [
+      "test_evidence_addressing.AddressStabilityTests.test_reprocessing_the_same_revision_and_config_mints_one_artifact"
+    ],
+    "E02": [
+      "test_evidence_addressing.CodePointOffsetTests.test_offsets_count_unicode_code_points_not_bytes_or_code_units"
+    ],
+    "E03": [
+      "test_evidence_addressing.TableContextTests.test_a_split_table_cites_rows_and_restores_header_and_units"
+    ],
+    "E04": [
+      "test_evidence_addressing.FenceReconstructionTests.test_a_synthesized_fence_is_context_and_can_never_be_cited"
+    ],
+    "E05": [
+      "test_evidence_addressing.RevisionHistoryTests.test_new_content_and_a_new_parser_never_shadow_an_old_citation"
+    ],
+    "E06": [
+      "test_evidence_addressing.TamperedEvidenceTests.test_tampering_and_out_of_range_spans_refuse_to_return_text"
+    ],
+    "E07": [
+      "test_evidence_addressing.ParserIndependenceTests.test_an_installed_parser_is_not_needed_to_read_an_old_artifact"
+    ],
+    "E08": [
+      "test_evidence_addressing.RawAvailabilityTests.test_normalized_text_is_citable_without_claiming_a_stored_file"
+    ],
+    "G01": [
+      "test_migration.MigrationTests.test_g01_a_v1_database_migrates_reentrantly_and_resumes_from_its_checkpoint",
+      "test_migration.MigrationTests.test_g01_an_old_single_scope_database_migrates_as_the_company_project",
+      "test_migration.MigrationTests.test_g01_losing_the_migration_bookkeeping_does_not_duplicate_a_committed_batch"
+    ],
+    "G02": [
+      "test_migration.MigrationTests.test_g02_raw_sources_are_re_extracted_and_generated_pages_carry_no_quotation"
+    ],
+    "G03": [
+      "test_migration.MigrationTests.test_g03_a_backup_with_no_later_writes_offers_only_restore",
+      "test_migration.MigrationTests.test_g03_rollback_reports_writes_made_after_the_backup_and_drops_them_on_restore"
+    ],
+    "K01": [
+      "test_knowledge_extraction.ValueGateTests.test_an_undispositioned_candidate_is_an_error",
+      "test_knowledge_extraction.ValueGateTests.test_the_constraint_survives_and_the_chatter_and_background_do_not"
+    ],
+    "K02": [
+      "test_knowledge_extraction.HypothesisTests.test_a_verified_answer_without_a_record_is_refused",
+      "test_knowledge_extraction.HypothesisTests.test_an_explicit_possibility_is_published_as_a_hypothesis"
+    ],
+    "K03": [
+      "test_knowledge_extraction.ProposedDecisionTests.test_a_model_that_writes_adopted_is_refused_rather_than_downgraded",
+      "test_knowledge_extraction.ProposedDecisionTests.test_a_proposal_stays_proposed_and_records_who_proposed_it"
+    ],
+    "K04": [
+      "test_knowledge_extraction.QualifierTests.test_a_dropped_qualifier_is_refused",
+      "test_knowledge_extraction.QualifierTests.test_every_qualifier_survives_into_the_published_claim"
+    ],
+    "K05": [
+      "test_knowledge_extraction.SynthesisPremiseTests.test_a_synthesis_missing_a_premise_is_refused",
+      "test_knowledge_extraction.SynthesisPremiseTests.test_the_synthesized_origin_carries_every_necessary_premise"
+    ],
+    "K06": [
+      "test_knowledge_extraction.HistoryPremiseTests.test_a_premise_from_history_is_cited_by_claim_version_id",
+      "test_knowledge_extraction.HistoryPremiseTests.test_an_empty_history_produces_a_review_not_an_invented_premise"
+    ],
+    "K07": [
+      "test_knowledge_extraction.ProjectContextTests.test_a_page_only_statement_is_reviewed_and_never_published",
+      "test_knowledge_extraction.ProjectContextTests.test_a_page_statement_citing_unrelated_material_is_never_a_kept_claim"
+    ],
+    "K08": [
+      "test_knowledge_extraction.ContradictionTests.test_a_chunk_that_denies_the_candidate_is_not_recorded_as_support",
+      "test_knowledge_extraction.ContradictionTests.test_a_grounding_verdict_against_a_clean_candidate_sends_it_to_review",
+      "test_knowledge_extraction.ContradictionTests.test_the_same_claim_written_with_the_materials_negation_is_published"
+    ],
+    "K09": [
+      "test_knowledge_extraction.ReconstructedReasonTests.test_a_rationale_claiming_to_be_explicit_without_a_record_is_refused",
+      "test_knowledge_extraction.ReconstructedReasonTests.test_a_reconstructed_reason_is_labelled_and_cannot_be_quoted",
+      "test_knowledge_extraction.ReconstructedReasonTests.test_a_recorded_reason_may_be_quoted"
+    ],
+    "K10": [
+      "test_knowledge_extraction.ProcessStructureTests.test_splitting_the_process_into_unordered_steps_is_refused",
+      "test_knowledge_extraction.ProcessStructureTests.test_the_process_keeps_its_order_inputs_outputs_and_exceptions"
+    ],
+    "K11": [
+      "test_knowledge_extraction.UnfinishedBatchTests.test_a_failed_batch_is_unfinished_and_the_tail_is_still_in_the_batches",
+      "test_knowledge_extraction.UnfinishedBatchTests.test_a_retry_with_the_model_fixed_completes_with_the_tail_decision"
+    ],
+    "M01": [
+      "test_claim_store_contract.ScopeAndStateTests.test_M01_scope_references_cannot_cross_a_project_boundary"
+    ],
+    "M02": [
+      "test_claim_store_contract.ScopeAndStateTests.test_M02_legal_state_axes_are_stored_and_unsupported_ones_are_refused"
+    ],
+    "M03": [
+      "test_claim_store_contract.ScopeAndStateTests.test_M03_a_change_set_with_an_unknown_top_level_shape_is_refused",
+      "test_claim_store_contract.ScopeAndStateTests.test_M03_the_store_mints_identity_and_records_the_authenticated_actor",
+      "test_knowledge_extraction.ForgedIdentityTests.test_the_extraction_never_copies_a_forged_identifier",
+      "test_knowledge_extraction.ForgedIdentityTests.test_the_pipeline_mints_the_ids_it_publishes",
+      "test_knowledge_extraction.ForgedIdentityTests.test_validate_changes_refuses_a_wrapped_update_package_with_forged_ids"
+    ],
+    "Q01": [
+      "test_projection_retrieval.ProjectionTests.test_q01_every_paragraph_is_a_committed_claim_version"
+    ],
+    "Q02": [
+      "test_projection_retrieval.ProjectionTests.test_q02_each_status_keeps_its_own_wording"
+    ],
+    "Q03": [
+      "test_projection_retrieval.ProjectionTests.test_q03_a_move_changes_the_mapping_and_nothing_else"
+    ],
+    "Q04": [
+      "test_projection_retrieval.RetrievalTests.test_q04_page_and_claim_search_do_not_count_one_claim_twice"
+    ],
+    "Q05": [
+      "test_projection_retrieval.RetrievalTests.test_q05_the_why_chain_separates_recorded_reasons_from_rebuilt_ones"
+    ],
+    "Q06": [
+      "test_projection_retrieval.RetrievalTests.test_q06_a_quote_comes_from_the_frozen_artifact"
+    ],
+    "Q07": [
+      "test_projection_retrieval.RetrievalTests.test_q07_current_and_historical_decisions_keep_their_recorded_times"
+    ],
+    "Q08": [
+      "test_projection_retrieval.RetrievalTests.test_q08_a_hand_edited_page_becomes_a_manual_note_source"
+    ],
+    "Q09": [
+      "test_projection_retrieval.RetrievalTests.test_q09_a_stale_projection_answers_from_current_claims"
+    ],
+    "Q10": [
+      "test_projection_retrieval.ChineseRetrievalTests.test_q10_chinese_recall_and_raw_derived_source_fallback"
+    ],
+    "R01": [
+      "test_claim_store_contract.TopicIdentityTests.test_R01_two_projects_share_one_topic_identity_but_never_their_claims"
+    ],
+    "R02": [
+      "test_claim_store_contract.TopicIdentityTests.test_R02_one_alias_may_mean_two_topics_until_an_explicit_merge"
+    ],
+    "R03": [
+      "test_claim_store_contract.ClaimEvolutionTests.test_R03_a_synthesized_claim_keeps_its_origin_when_a_user_says_it_outright"
+    ],
+    "R04": [
+      "test_claim_store_contract.ClaimEvolutionTests.test_R04_older_material_imported_later_does_not_reorder_the_decision_in_force"
+    ],
+    "R05": [
+      "test_claim_store_contract.ClaimEvolutionTests.test_R05_a_narrower_statement_is_a_new_claim_and_refines_it_explicitly"
+    ],
+    "R06": [
+      "test_claim_store_contract.ClaimEvolutionTests.test_R06_contradictory_judgments_are_both_kept_and_recorded_once"
+    ],
+    "R07": [
+      "test_claim_store_contract.ClaimEvolutionTests.test_R07_a_withdrawn_premise_is_recomputed_across_support_groups"
+    ],
+    "R08": [
+      "test_claim_store_contract.ClaimEvolutionTests.test_R08_illegal_derivation_shapes_are_refused_and_a_valid_chain_is_accepted"
+    ],
+    "T01": [
+      "test_claim_store_contract.RetryTests.test_T01_a_retry_of_the_same_request_returns_the_first_outcome"
+    ],
+    "T02": [
+      "test_claim_store_contract.RetryTests.test_T02_the_same_key_with_a_different_request_raises_and_keeps_the_first_result"
+    ],
+    "T03": [
+      "test_claim_store_contract.RetryTests.test_T03_a_reimport_reuses_the_revision_and_a_new_source_only_appends_provenance"
+    ],
+    "T04": [
+      "test_claim_store_contract.FaultInjectionTests.test_T04_a_failure_before_the_commit_leaves_no_half_written_knowledge",
+      "test_claim_store_contract.FaultInjectionTests.test_T04_a_run_that_never_committed_does_not_read_as_completed"
+    ],
+    "T05": [
+      "test_claim_store_contract.RetryTests.test_T05_a_refused_commit_is_retried_safely_and_a_lost_response_replays_the_stored_result"
+    ],
+    "T06": [
+      "test_claim_store_contract.RetryTests.test_T06_a_stale_base_version_conflicts_and_the_stage_cache_follows_every_fingerprint"
+    ],
+    "V01": [
+      "test_claim_store_contract.ReviewActionTests.test_V01_retain_records_retention_without_verifying_adopting_or_making_explicit"
+    ],
+    "V02": [
+      "test_claim_store_contract.ReviewActionTests.test_V02_a_review_cannot_be_applied_to_a_claim_that_moved"
+    ],
+    "V03": [
+      "test_claim_store_contract.ReviewActionTests.test_V03_one_ambiguous_identity_holds_only_its_own_item_back"
+    ],
+    "X01": [
+      "test_modes_and_adapters.ModeParityTests.test_a_controlled_extraction_produces_the_same_change_set_in_both_modes",
+      "test_modes_and_adapters.ModeParityTests.test_local_material_never_reaches_the_shared_database_or_a_module_cache"
+    ],
+    "X02": [
+      "test_modes_and_adapters.CleanSkillInstallTests.test_frozen_local_knowledge_is_readable_through_the_cli",
+      "test_modes_and_adapters.CleanSkillInstallTests.test_the_vendored_core_loads_without_the_server_package"
+    ],
+    "X03": [
+      "test_knowledge_extraction.PromptInjectionTests.test_the_material_is_screened_and_its_instructions_are_never_obeyed",
+      "test_knowledge_extraction.PromptInjectionTests.test_the_pipeline_opens_no_path_named_in_the_material",
+      "test_knowledge_extraction.PromptInjectionTests.test_the_recorded_suspicion_does_not_change_any_status"
+    ],
+    "X04": [
+      "test_modes_and_adapters.LegacyWriteBoundaryTests.test_a_prebuilt_pages_update_is_rejected_rather_than_committed",
+      "test_modes_and_adapters.LegacyWriteBoundaryTests.test_claim_reads_stay_inside_the_requested_project",
+      "test_modes_and_adapters.LegacyWriteBoundaryTests.test_material_only_submits_go_through_claims",
+      "test_modes_and_adapters.LegacyWriteBoundaryTests.test_restoring_an_old_page_does_not_restore_the_decision",
+      "test_modes_and_adapters.LegacyWriteBoundaryTests.test_the_v2_flag_is_what_closes_the_old_route"
+    ]
+  },
+  "spec_count": 56,
+  "uncovered": [],
+  "unknown": []
+}

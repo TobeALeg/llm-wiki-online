@@ -239,6 +239,7 @@ CREATE TABLE IF NOT EXISTS knowledge_submissions (
     project_id TEXT NOT NULL,
     idempotency_key TEXT NOT NULL,
     request_hash TEXT NOT NULL,
+    intent_hash TEXT NOT NULL DEFAULT '',
     result_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
     PRIMARY KEY (knowledge_space_id, project_id, idempotency_key)
@@ -569,6 +570,7 @@ CREATE TABLE IF NOT EXISTS review_decisions (
     note TEXT NOT NULL DEFAULT '',
     expected_version TEXT NOT NULL,
     idempotency_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL DEFAULT '',
     result_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
     UNIQUE (review_id, idempotency_key)
@@ -634,11 +636,29 @@ class ClaimStore:
             if not db.execute("PRAGMA foreign_keys").fetchone()[0]:
                 raise ClaimStoreError("Foreign key enforcement is off on this connection.")
             db.executescript(SCHEMA_SQL)
+            self._add_missing_columns(db)
             checksum = hashlib.sha256(SCHEMA_SQL.encode("utf-8")).hexdigest()
             db.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
                 (2, "knowledge_v2", checksum, now_iso()),
             )
+
+    @staticmethod
+    def _add_missing_columns(db: sqlite3.Connection) -> None:
+        """Add a column a database created by an earlier build does not have.
+
+        `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table, so a new
+        column only reaches an older database through an explicit ALTER.
+        """
+
+        wanted = {"review_decisions": ("request_hash",), "knowledge_submissions": ("intent_hash",)}
+        for table, columns in wanted.items():
+            existing = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+            for column in columns:
+                if column not in existing:
+                    db.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
+                    )
 
     def schema_tables(self) -> set[str]:
         with self._db() as db:
@@ -1139,11 +1159,35 @@ class ClaimStore:
     # Commit
     # ------------------------------------------------------------------
 
+    CHANGE_SET_FIELDS = frozenset(
+        {
+            "schema_version",
+            "knowledge_space_id",
+            "project_id",
+            "run_id",
+            "base_version",
+            "claims",
+            "relations",
+            "topics",
+            "reviews",
+            "dropped",
+            "dirty_pages",
+        }
+    )
+
     def _validate_changeset(self, changeset: Mapping[str, Any], scope: Scope) -> None:
         if not isinstance(changeset, Mapping):
             raise ClaimStoreError("A change set must be an object.")
         if changeset.get("schema_version") != 2:
             raise ClaimStoreError("Unsupported change set schema version.")
+        # A field the store does not read is either a mistake or an attempt to
+        # smuggle in a shape something else will act on. Both are refused, and
+        # naming them makes the refusal actionable.
+        unknown = sorted(set(changeset) - self.CHANGE_SET_FIELDS)
+        if unknown:
+            raise ClaimStoreError(
+                "Change set carries fields this store does not accept: " + ", ".join(unknown)
+            )
         if changeset.get("project_id") != scope.project_id:
             raise ScopeError(
                 f"Change set targets project {changeset.get('project_id')}, not {scope.project_id}."
@@ -1189,16 +1233,34 @@ class ClaimStore:
                 }
             ).encode("utf-8")
         ).hexdigest()
+        # The same intent, with the version the caller was on left out. A process
+        # that dies between a successful commit and recording it comes back with a
+        # refreshed base_version, and that retry is the same request rather than a
+        # different one. Without this the run wedges forever on its own key.
+        intent_hash = hashlib.sha256(
+            _json(
+                {
+                    "space": scope.knowledge_space_id,
+                    "project": scope.project_id,
+                    # The change set carries its own base_version, so that field is
+                    # removed here too. Leaving it in would make the retry look like
+                    # a different request and put the wedge straight back.
+                    "changeset": {key: value for key, value in changeset.items() if key != "base_version"},
+                }
+            ).encode("utf-8")
+        ).hexdigest()
 
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
                 existing = db.execute(
-                    "SELECT request_hash, result_json FROM knowledge_submissions WHERE knowledge_space_id = ? AND project_id = ? AND idempotency_key = ?",
+                    "SELECT request_hash, intent_hash, result_json FROM knowledge_submissions WHERE knowledge_space_id = ? AND project_id = ? AND idempotency_key = ?",
                     (scope.knowledge_space_id, scope.project_id, idempotency_key),
                 ).fetchone()
                 if existing:
-                    if existing["request_hash"] != request_hash:
+                    same_request = existing["request_hash"] == request_hash
+                    same_intent = bool(existing["intent_hash"]) and existing["intent_hash"] == intent_hash
+                    if not same_request and not same_intent:
                         db.rollback()
                         raise IdempotencyError(
                             "Idempotency key was already used for a different request."
@@ -1241,8 +1303,16 @@ class ClaimStore:
                         **{**outcome.as_dict(), "status": "noop", "knowledge_version": current}
                     )
                 db.execute(
-                    "INSERT INTO knowledge_submissions(knowledge_space_id, project_id, idempotency_key, request_hash, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (scope.knowledge_space_id, scope.project_id, idempotency_key, request_hash, _json(outcome.as_dict()), stamp),
+                    "INSERT INTO knowledge_submissions(knowledge_space_id, project_id, idempotency_key, request_hash, intent_hash, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        scope.knowledge_space_id,
+                        scope.project_id,
+                        idempotency_key,
+                        request_hash,
+                        intent_hash,
+                        _json(outcome.as_dict()),
+                        stamp,
+                    ),
                 )
                 db.commit()
             except Exception:
@@ -2476,8 +2546,8 @@ class ClaimStore:
                 db.execute(
                     """INSERT INTO review_decisions(
                            decision_id, review_id, action, actor_subject, note, expected_version,
-                           idempotency_key, result_json, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           idempotency_key, request_hash, result_json, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         new_id("rvd_"),
                         review_id,
@@ -2486,6 +2556,7 @@ class ClaimStore:
                         note,
                         expected_version,
                         idempotency_key,
+                        request_hash,
                         _json(result),
                         stamp,
                     ),

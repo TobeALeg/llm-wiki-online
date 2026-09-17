@@ -2,6 +2,7 @@ import sys
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
@@ -67,7 +68,9 @@ class AuthTests(unittest.TestCase):
 
     def test_existing_auth_database_is_migrated_without_losing_tokens(self):
         database = Path(self.temporary.name) / "legacy.sqlite3"
-        with sqlite3.connect(database) as db:
+        # `with sqlite3.connect(...)` commits but does not close, so the file stays
+        # locked and the temporary directory cannot be removed on Windows.
+        with closing(sqlite3.connect(database)) as db:
             db.executescript("""
                 CREATE TABLE mcp_tokens (
                     token_hash TEXT PRIMARY KEY, subject TEXT NOT NULL,
@@ -78,7 +81,7 @@ class AuthTests(unittest.TestCase):
                 );
             """)
         AuthStore(database)
-        with sqlite3.connect(database) as db:
+        with closing(sqlite3.connect(database)) as db:
             token_columns = {row[1] for row in db.execute("PRAGMA table_info(mcp_tokens)")}
             state_columns = {row[1] for row in db.execute("PRAGMA table_info(oauth_states)")}
         self.assertTrue({"credential_id", "label", "token_kind", "created_at"} <= token_columns)

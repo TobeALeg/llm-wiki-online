@@ -431,6 +431,22 @@ class _V1Reader:
         return int(row["total"])
 
 
+def _has_raw_backing(reader: _V1Reader, project_id: str, page: Mapping[str, Any]) -> bool:
+    """Whether at least one source the page cites still holds text.
+
+    This is the line between a page whose material can be re-extracted and a page
+    that is nothing but generated text.
+    """
+
+    cited, readable = _cited_source_ids(page)
+    if not readable or not cited:
+        return False
+    return any(
+        (source := reader.source(project_id, source_id)) is not None and _has_raw_text(source)
+        for source_id in cited
+    )
+
+
 def _v1_legacy_refs(reader: _V1Reader, projects: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Every page-to-source reference the v1 database makes, and whether it resolves."""
 
@@ -560,19 +576,9 @@ def plan_migration(*, v1_database: str | Path, knowledge_space_id: str, project_
             for row in reader.pages(str(project["project_id"]))
         ]
         with_raw = sum(1 for _, row in sources if _has_raw_text(row))
-        generated_only = 0
-        for project_id_value, page in pages:
-            cited, readable = _cited_source_ids(page)
-            if not readable or not cited:
-                generated_only += 1
-                continue
-            backed = any(
-                (source := reader.source(project_id_value, source_id)) is not None
-                and _has_raw_text(source)
-                for source_id in cited
-            )
-            if not backed:
-                generated_only += 1
+        generated_only = sum(
+            1 for project_id_value, page in pages if not _has_raw_backing(reader, project_id_value, page)
+        )
         return {
             "v1_database": str(Path(v1_database)),
             "knowledge_space_id": space,
@@ -630,8 +636,13 @@ class _Migration:
                 )
         self.connection = _connect(v2_database)
         self.connection.executescript(MIGRATION_SCHEMA_SQL)
-        self.store = ClaimStore(v2_database, knowledge_space_id=knowledge_space_id)
+        try:
+            self.store = ClaimStore(v2_database, knowledge_space_id=knowledge_space_id)
+        except Exception:
+            self.connection.close()
+            raise
         self.migrated_sources = 0
+        self.replayed_sources = 0
         self.resume = "fresh"
         self._ensured: set[str] = set()
         if self.projects:
@@ -927,6 +938,10 @@ class _Migration:
         artifact: Any,
         chunks: Sequence[Any],
     ) -> list[str]:
+        replayed = self._committed_claim_ids(project_id, v1_source_id)
+        if replayed is not None:
+            self.replayed_sources += 1
+            return replayed
         context = {
             "scope": scope,
             "source_id": source_id,
@@ -985,6 +1000,36 @@ class _Migration:
             project_id=project_id,
         )
         return [*outcome.created_claim_ids, *outcome.updated_claim_ids]
+
+    def _committed_claim_ids(self, project_id: str, v1_source_id: str) -> list[str] | None:
+        """The claims an earlier call already committed for this source, if any.
+
+        A crash between the commit and the mapping write leaves exactly this gap:
+        the batch is committed, the map has no row for it, and a retry computes a
+        request hash the store no longer recognises because the version number
+        moved. The store recorded its own answer under the same stable key, so
+        asking for that record is what lets the retry finish instead of failing
+        forever on a batch that is already in the database.
+        """
+
+        row = self.connection.execute(
+            """SELECT result_json FROM knowledge_submissions
+               WHERE knowledge_space_id = ? AND project_id = ? AND idempotency_key = ?""",
+            (
+                self.knowledge_space_id,
+                project_id,
+                _claim_key(self.knowledge_space_id, project_id, v1_source_id),
+            ),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            stored = json.loads(row["result_json"])
+            return [*stored["created_claim_ids"], *stored["updated_claim_ids"]]
+        except (TypeError, ValueError, KeyError) as error:
+            raise MigrationError(
+                f"The commit recorded for source {v1_source_id} cannot be read back: {error}"
+            ) from error
 
     def _migrate_page(self, project_id: str, slug: str) -> None:
         page = self.reader.page(project_id, slug)
@@ -1101,14 +1146,8 @@ class _Migration:
             generated_only = 0
             versions = 0
             for page in pages:
-                cited, readable = _cited_source_ids(page)
                 versions += len(self.reader.history(project_id, str(page["slug"]))["versions"])
-                backed = readable and any(
-                    (source := self.reader.source(project_id, source_id_value)) is not None
-                    and _has_raw_text(source)
-                    for source_id_value in cited
-                )
-                generated_only += 0 if backed else 1
+                generated_only += 0 if _has_raw_backing(self.reader, project_id, page) else 1
             claims = int(
                 self.connection.execute(
                     "SELECT COUNT(*) AS total FROM claims WHERE knowledge_space_id = ? AND project_id = ?",
@@ -1160,6 +1199,7 @@ class _Migration:
             "claims": {
                 "total": claim_total,
                 "extracted": self._mapping_count(None, "claim"),
+                "replayed": self.replayed_sources,
             },
             "claims_skipped_reason": (
                 None if self.extractor is not None else CLAIMS_SKIPPED_WITHOUT_EXTRACTOR
@@ -1708,7 +1748,7 @@ def rollback_plan(*, v2_database: str | Path, backup: str | Path) -> dict[str, A
                 if added:
                     new_writes[table] = added
     total = sum(len(ids) for ids in new_writes.values())
-    identifier = sorted({identifier for ids in new_writes.values() for identifier in ids})
+    new_write_ids = sorted({value for ids in new_writes.values() for value in ids})
     if total:
         options = ["read_only_fallback", "replay_from_log"]
         statement = (
@@ -1740,7 +1780,7 @@ def rollback_plan(*, v2_database: str | Path, backup: str | Path) -> dict[str, A
             "to be replayed from the log or the live database served read-only while they are."
         ),
         "v2_writes_since_backup": total,
-        "new_write_ids": identifier,
+        "new_write_ids": new_write_ids,
         "new_writes": new_writes,
         "options": options,
         "restore_backup_drops_writes": bool(total),

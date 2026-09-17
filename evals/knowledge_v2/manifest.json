@@ -1,0 +1,82 @@
+{
+  "title": "LLMWiki Knowledge Architecture v2 评测清单",
+  "language": "zh-CN",
+  "spec_section": "LLMWiki-v2-Implementation-Plan-and-Acceptance.md 第 8.1 与 8.2 节",
+  "notice": "这是评测口径与规模的契约，不是一份通过的评测报告。真实材料组的 gold 需要人工确认；本文件里已存在的样本全部是构造边界组，label_status 标为 constructed_unconfirmed，不冒充真实用户数据，也不冒充人工确认。",
+  "splits": {
+    "dev": {"material_groups": 20, "real": 16, "constructed": 4},
+    "holdout": {"material_groups": 10, "real": 8, "constructed": 2}
+  },
+  "minimums": {
+    "material_groups": 30,
+    "must_keep": 60,
+    "decision_constraint": 20,
+    "negative": 20,
+    "synthesis_target": 10,
+    "future_questions": 30,
+    "holdout_must_keep": 20,
+    "holdout_decision_constraint": 10,
+    "holdout_negative": 10,
+    "holdout_synthesis_target": 5,
+    "holdout_future_questions": 10
+  },
+  "grouping_rules": [
+    "同一对话链、同源改写或紧密相关版本放在同一分区，避免一条推导链一半进 dev、一半进 holdout。",
+    "holdout 不出现在提示词示例或模型调试记录里。",
+    "构造样本只用于边界验证，不冒充真实用户数据。",
+    "真实材料的 speaker、时间、采用状态不足时标签就是 unknown 或 proposed，不由标注者猜一个方便的答案。"
+  ],
+  "gold_fields": [
+    "unit_id",
+    "group_id",
+    "split",
+    "project_id",
+    "must_keep",
+    "expected_meaning",
+    "required_qualifiers",
+    "forbidden_assertions",
+    "allowed_kinds",
+    "evidence_targets",
+    "future_questions",
+    "label_status"
+  ],
+  "matching_policy": {
+    "semantic": "不要求 exact statement 文案",
+    "invariant": "主体、否定、条件、时间、发言者与 adopted 状态不能变",
+    "granularity_check": "单条臃肿 Claim 覆盖多个 gold 时还要检查是否违反独立维护粒度，不能用整篇原文塞进 statement 换取高 recall"
+  },
+  "thresholds": {
+    "source": "evals/knowledge_v2/metrics.py 的 THRESHOLDS 常量",
+    "rule": "P0 冻结门槛；此后不得为了让某次发布通过而临时改分母、删失败样本或降低阈值。"
+  },
+  "critical_failures": {
+    "source": "evals/knowledge_v2/metrics.py 的 CRITICAL_FAILURES 常量",
+    "rule": "即使总忠实度达到 95%，出现其中任何一项也不放行。",
+    "items": [
+      "凭空捏造 adopted decision",
+      "串项目或串知识空间",
+      "把假设写成已验证事实",
+      "把系统重建理由写成当时原话",
+      "未授权更改旧决定",
+      "伪造原文引用",
+      "来源损坏后默默生成替代证据"
+    ]
+  },
+  "review_burden": {
+    "target": "正常真实材料的 REVIEW 比例 <= 0.15",
+    "denominator": "同批全部候选",
+    "rule": "这不是自动压队列的硬配额。超过目标时分析原因并改进，不得为降低比例而隐瞒歧义、自动采纳决定或 DROP 有价值内容。"
+  },
+  "not_executed": [
+    {
+      "item": "真实模型的 holdout 全链路三次运行",
+      "reason": "需要配置 LLM_WIKI_API_KEY 与真实模型供应商；本次执行环境没有可用凭据。",
+      "how_to_run": "python evals/knowledge_v2/run_eval.py --split holdout --runs 3 --model <model>"
+    },
+    {
+      "item": "真实材料组的 gold 人工确认",
+      "reason": "需要项目负责人或独立验收者逐条确认 must_keep、限定与禁止断言；机器不能给自己签收。",
+      "status_field": "label_status"
+    }
+  ]
+}
