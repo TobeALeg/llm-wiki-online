@@ -54,3 +54,8 @@ ts	phase	decision	why	evidence	result
 2026-09-18T01:40:00Z	draft	发现待审问题是英文而材料是中文，改为按被审命题的语言选模板	问题正是人要照着做判断的东西；反过来英文项目也会遇到镜像问题	knowledge_pipeline.review_question	两种语言各一份，报告渲染时按 trigger_code 取，不必重跑模型
 2026-09-18T01:45:00Z	draft	发现模型把步骤名写进 depends_on 时裸 ValueError 打掉整次运行	没有调用方把裸 ValueError 当契约错误接住；一个格式错误的步骤不该终止整轮	knowledge_types._step_number	数字或数字文本接受，其余以 INVALID_ATTRIBUTES 具名拒绝
 2026-09-18T01:52:00Z	draft	商业计划五组跑完：266 条草稿，REVIEW 18.8%	这批材料的价值在于版本链，v1.0 到 v1.4 覆盖决定被修正与推翻的真实情形	reports/knowledge-v2/draft/*.md	发布 148、拒绝 59、丢弃 9、待审 50；决策/约束类只有 7 条
+2026-09-18T02:10:00Z	review	复核页面做成单文件自包含 HTML，批注存浏览器本地，导出回读	批注要能离线完成，也要能回到流水线；页面里不放服务端，导出 JSON 就是接口	reports/knowledge-v2/review/index.html	266 条，导出后 apply_review 直接写标注
+2026-09-18T02:15:00Z	review	不通过的不删除，单独记进 gold.rejected.jsonl 连同批注	标注的历史不可见就没法审计；规格也禁止为了指标好看而删样本	apply_review.reject	被拒草稿与理由留档
+2026-09-18T02:18:00Z	review	零容忍单列成 critical_failures.jsonl 而不是揉进指标	规格说即使总指标达标，出现其中任何一项也不放行，所以它是评审的产出而不是算出来的指标	apply_review.main	勾选数量独立报告
+2026-09-18T02:22:00Z	review	在浏览器里实际驱动页面验证：点击、批注、零容忍、筛选、导出、重载持久化	界面交付要跑真实界面，不能只验证生成脚本；file: 不能直接导航，于是起本地服务后驱动	screenshot + evaluate 断言	266 卡片渲染正确，计数与筛选联动，重载后批注仍在
+2026-09-18T02:25:00Z	review	页面加本地存储回退与显式警告，并提供一键打开脚本	直接双击打开时浏览器可能禁止保存进度，一次刷新就丢一批批注；宁可提示也不要静默丢失	build_review_page 的 store 包装 + open_review.py	禁写时显示红色提示与推荐命令
