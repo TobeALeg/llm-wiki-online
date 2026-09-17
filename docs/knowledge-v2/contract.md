@@ -19,6 +19,18 @@ Claim 是权威知识。Page 是投影，可以被删除并重新生成，删除
 
 实现见 `plugins/llm-wiki/llm_wiki_mcp/claim_store.py`。
 
+## 1.1 地址宽度
+
+一个地址空间一个宽度，由 `knowledge_types` 的两个常量唯一定义。
+
+| 空间 | 前缀 | 宽度 | 来源 |
+|---|---|---|---|
+| 内容派生 | `art_`、`evd_` | 64 位十六进制 | 整个 SHA-256 摘要；内容变了地址就变 |
+| 存储分配 | `clm_`、`clv_`、`org_`、`top_`、`rev_`、`sgr_`、`rel_`、`pag_` | 32 位十六进制 | uuid4；名字与内容无关 |
+
+截断内容地址会让碰撞可触及，所以不截断。`tests/test_id_width_contract.py` 守住这条不变量：
+两个常量各只有一处定义，铸造函数的实际产出与 pattern 一致，Web 路由不自带第二份宽度。
+
 ## 2. 坐标与寻址
 
 `offset_unit = unicode_code_point`，区间为半开 `[start, end)`，偏移基于**已保存的
@@ -156,6 +168,14 @@ G1 OR G2：任一完整有效的支持组可维持 C 的支持状态
 premise 行本身读出，不信任缓存列，并且循环到不动点，因为失去支持的 premise 不再是可用的
 premise。
 
+## 8.1 来源血缘：转贴不是第二个见证
+
+同一篇文章的转贴、同一段对话的页面总结，是同一份材料被看到两次。`support_lineage` 按证据
+所指内容的摘要分组，两个支持组的证据内容相同时只算一个见证，并报告 `repost_groups`。
+`reposted_sources` 列出本项目中互为转贴的来源。
+
+复制次数不提升任何状态。需要多个独立见证才能成立的说法，只能由不同内容的材料支持。
+
 ## 9. REVIEW
 
 REVIEW 用于有语义后果的歧义，不用于普通"尚未验证的假设"。
@@ -208,6 +228,19 @@ received → preparing → extracting → validating → ready_to_commit → com
 - `base_version` 过时 → `ConflictError` 带当前版本，不写入。
 - 阶段缓存以输入 hash、配置、prompt 版本与模型指纹为键，任一变化都不命中。
 
+## 11.1 重试与修复
+
+`AttemptBudget` 把两类分开计，各自上限一次。
+
+| 类别 | 含义 | 计数 |
+|---|---|---|
+| 传输重试 | 请求没产生可用答复 | `transport_retries` |
+| 语义修复 | 答复不符合契约后的重问 | `semantic_repairs` |
+
+批次首次失败重试一次，再失败即停，批次状态为 `unfinished`。重试预算耗尽后
+`run_status` 返回 `failed`，不是 `extracting`，因为无法再前进的运行不该被读成还能重试。
+批次记录带稳定 `error_code`，供应方文案不参与分组。
+
 ## 12. 模型边界
 
 模型调用不写 Store。模型输出先变成 Candidate，再经过最终验证，再由 Store 分配身份。
@@ -216,6 +249,16 @@ received → preparing → extracting → validating → ready_to_commit → com
 
 材料正文里的指令是材料，不是指令。`screen_material` 标出可疑片段并记录，但不执行、不因它
 改变任何状态，也不因它抛错。
+
+## 12.1 模型角色与用量
+
+`LLM_WIKI_MODEL` 是兼容默认。四个可选角色覆盖：`LLM_WIKI_DISCOVERY_MODEL`、
+`LLM_WIKI_REASONING_MODEL`、`LLM_WIKI_GROUNDING_MODEL`、`LLM_WIKI_RENDER_MODEL`。
+`resolve_model` 返回模型 id 与它来自哪个变量，所以报告不需要猜这次用的是哪个配置。
+本地 CLI 与服务器用同一个解析器。
+
+每个模型阶段记录角色、模型、模型来源、prompt 版本、尝试次数与供应商上报的 token。
+供应商没有 usage 块时记为 `unknown`，不填估算值。`stage_provenance` 取出这些记录。
 
 ## 13. 未实现与明确的边界
 
