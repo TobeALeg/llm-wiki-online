@@ -11,3 +11,10 @@ dist/
 build/
 coverage/
 .llm-wiki/
+
+# 材料派生的本地数据。正文来自私有材料，只在本机生成与查看，不进仓库。
+evals/knowledge_v2/gold.draft.jsonl
+evals/knowledge_v2/gold.rejected.jsonl
+evals/knowledge_v2/critical_failures.jsonl
+reports/knowledge-v2/draft/
+reports/knowledge-v2/review/index.html
